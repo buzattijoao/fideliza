@@ -33,11 +33,12 @@ import ProductForm from './ProductForm';
 import SaleForm from './SaleForm';
 import PointsConfigForm from './PointsConfigForm';
 import PointsManagementForm from './PointsManagementForm';
-import { formatCurrency, formatDate, getUpcomingBirthdays, formatBirthDate, getAge } from '../../utils/helpers';
+import { formatCurrency, formatDate, getUpcomingBirthdays, formatBirthDate, getAge, generateId } from '../../utils/helpers';
 import QRCodeModal from './QRCodeModal';
 import StatisticsModal from './StatisticsModal';
 import WebhookConfigModal from './WebhookConfigModal';
 import FinancialSaleForm from './FinancialSaleForm';
+import { LoyaltyRequest, Customer, PointsTransaction } from '../../types';
 
 export default function AdminDashboard() {
   const { state, dispatch } = useApp();
@@ -235,44 +236,46 @@ export default function AdminDashboard() {
     dispatch({ type: 'UPDATE_LOYALTY_REQUEST', payload: updatedRequest });
   };
 
-  const handleRejectRequest = (request: any, shouldReturnPoints: boolean) => {
-    if (shouldReturnPoints) {
-      // Return points to customer
-      const customer = state.customers.find(c => c.id === request.customerId);
-      if (customer) {
-        const updatedCustomer = {
-          ...customer,
-          points: customer.points + request.pointsUsed,
-        };
+  const handleRejectRequest = (request: LoyaltyRequest, shouldReturnPoints: boolean) => {
+  // 1) Se for para devolver pontos, atualiza o cliente e registra a transação
+  if (shouldReturnPoints) {
+    const customer = state.customers.find(c => c.id === request.customerId);
+    if (customer) {
+      // Atualiza saldo do cliente
+      const updatedCustomer: Customer = {
+        ...customer,
+        points: customer.points + request.pointsUsed,
+      };
+      dispatch({ type: 'UPDATE_CUSTOMER', payload: updatedCustomer });
 
-        // Create credit transaction
-        const transaction = {
-          id: generateId(),
-          companyId: currentCompany.id,
-          customerId: customer.id,
-          customerName: customer.name,
-          type: 'credit' as const,
-          points: request.pointsUsed,
-          description: `Devolução: ${request.productName} (solicitação rejeitada)`,
-          date: new Date(),
-        };
-
-        dispatch({ type: 'UPDATE_CUSTOMER', payload: updatedCustomer });
-        dispatch({ type: 'ADD_POINTS_TRANSACTION', payload: transaction });
-      }
+      // Cria registro de transação de crédito
+      const transaction: PointsTransaction = {
+        id: generateId(),
+        companyId: currentCompany.id,
+        customerId: customer.id,
+        customerName: customer.name,
+        type: 'credit',
+        points: request.pointsUsed,
+        description: `Devolução: ${request.productName} (solicitação rejeitada)`,
+        date: new Date(),
+      };
+      dispatch({ type: 'ADD_POINTS_TRANSACTION', payload: transaction });
     }
+  }
 
-    const updatedRequest = {
-      ...request,
-      status: 'rejected' as const,
-      processedDate: new Date(),
-      processedBy: state.currentUser?.name || 'Admin',
-    };
-
-    dispatch({ type: 'UPDATE_LOYALTY_REQUEST', payload: updatedRequest });
-    setShowRejectModal(false);
-    setRequestToReject(null);
+  // 2) Atualiza sempre o status da solicitação para 'rejected'
+  const updatedRequest: LoyaltyRequest = {
+    ...request,
+    status: 'rejected',
+    processedDate: new Date(),
+    processedBy: state.currentUser?.name || 'Admin',
   };
+  dispatch({ type: 'UPDATE_LOYALTY_REQUEST', payload: updatedRequest });
+
+  // 3) Fecha o modal
+  setShowRejectModal(false);
+  setRequestToReject(null);
+};
 
   const handleCompleteRequest = (request: any) => {
     if (window.confirm('Marcar como concluído? O produto foi entregue ao cliente?')) {
@@ -1245,20 +1248,21 @@ export default function AdminDashboard() {
                 </p>
               </div>
 
-              <div className="flex gap-3">
-                <button
-                  onClick={() => handleRejectRequest(requestToReject, false)}
-                  className="flex-1 px-4 py-3 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
-                >
-                  Rejeitar sem devolver pontos
-                </button>
-                <button
-                  onClick={() => handleRejectRequest(requestToReject, true)}
-                  className="flex-1 px-4 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
-                >
-                  Rejeitar e devolver pontos
-                </button>
-              </div>
+              {/* dentro do JSX do Reject Modal */}
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => handleRejectRequest(requestToReject!, false)}
+                    className="flex-1 px-4 py-3 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                  >
+                    Rejeitar sem devolver pontos
+                  </button>
+                  <button
+                    onClick={() => handleRejectRequest(requestToReject!, true)}
+                    className="flex-1 px-4 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                  >
+                    Rejeitar e devolver pontos
+                  </button>
+                </div>
             </div>
           </div>
         </div>

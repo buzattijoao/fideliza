@@ -107,65 +107,13 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, currentCompany: action.payload };
     case 'ADD_CUSTOMER':
       return { ...state, customers: [...state.customers, action.payload] };
-          /*return {
+    case 'UPDATE_CUSTOMER':
+      return {
         ...state,
         customers: state.customers.map(c =>
           c.id === action.payload.id ? action.payload : c
         ),
-      };*/
-      case 'UPDATE_CUSTOMER': {
-        // 1) Recria a lista de customers, substituindo apenas o que mudou
-        const updatedCustomers = state.customers.map(customer => {
-          if (customer.id === action.payload.id) {
-            return {
-              id:           action.payload.id,
-              name:         action.payload.name,
-              cpf:          action.payload.cpf,
-              email:        action.payload.email,
-              phone:        action.payload.phone,
-              address:      action.payload.address,
-              birthDate:    action.payload.birthDate,
-              points:       action.payload.points,
-              password:     action.payload.password,
-              createdAt:    action.payload.createdAt,
-              companyId:    action.payload.companyId,
-            };
-          }
-          return customer;
-        });
-
-        // 2) Se o usuário logado for esse customer, atualiza-o também
-        let updatedCurrentUser: User | null = state.currentUser;
-        if (
-          state.currentUser !== null &&
-          state.currentUser.id === action.payload.id
-        ) {
-          updatedCurrentUser = {
-            id:        action.payload.id,
-            type:      state.currentUser.type,       // mantém o tipo (superadmin|admin|customer)
-            email:     action.payload.email,
-            name:      action.payload.name,
-            companyId: state.currentUser.companyId,  // companyId não muda normalmente
-          };
-        }
-
-        // 3) Retorna o novo state completo, listando todos os slices
-        return {
-          customers:           updatedCustomers,
-          products:            state.products,
-          sales:               state.sales,
-          pointsConfigs:       state.pointsConfigs,
-          pointsTransactions:  state.pointsTransactions,
-          companies:           state.companies,
-          plans:               state.plans,
-          loyaltyRequests:     state.loyaltyRequests,
-          webhookConfigs:      state.webhookConfigs,
-          currentUser:         updatedCurrentUser,
-          currentCompany:      state.currentCompany,
-          isLoading:           state.isLoading,
-        };
-     }
-
+      };
     case 'DELETE_CUSTOMER':
       return {
         ...state,
