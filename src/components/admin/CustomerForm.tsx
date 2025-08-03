@@ -3,13 +3,16 @@ import { X, User, Phone, Mail, MapPin, CreditCard } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
 import { Customer } from '../../types';
 import { generateId, validateCPF, validateEmail, formatCPF, formatPhone, cleanPhone } from '../../utils/helpers';
+import { supabase } from '../../lib/supabase';
 
 interface CustomerFormProps {
   customer?: Customer;
   onClose: () => void;
+  onSave: () => void;      // dispara ao término de insert/update
 }
 
-export default function CustomerForm({ customer, onClose }: CustomerFormProps) {
+
+export default function CustomerForm({ customer, onClose, onSave }: CustomerFormProps) {
   const { state, dispatch } = useApp();
   const [formData, setFormData] = useState({
     name: customer?.name || '',
@@ -78,33 +81,58 @@ export default function CustomerForm({ customer, onClose }: CustomerFormProps) {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!validate()) return;
+  const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault()
+  if (!validate()) return
 
-    const customerData: Customer = {
-      id: customer?.id || generateId(),
-      companyId: customer?.companyId || state.currentCompany?.id || '',
-      name: formData.name.trim(),
-      cpf: formData.cpf,
-      email: formData.email.trim(),
-      phone: formData.phone,
-      address: formData.address.trim(),
-      birthDate: new Date(formData.birthDate),
-      points: customer?.points || 0,
-      password: customer?.password || cleanPhone(formData.phone),
-      createdAt: customer?.createdAt || new Date(),
-    };
+  // 1) Monte o payload
+  const payload = {
+  name:        formData.name.trim(),
+  cpf:         formData.cpf,
+  email:       formData.email.trim(),
+  phone:       formData.phone,
+  address:     formData.address.trim() || null,
+  birth_date:  formData.birthDate,               // ⚠️ use snake_case
+  points:      customer?.points ?? 0,
+  password:    customer?.password ?? cleanPhone(formData.phone),
+  company_id:  state.currentCompany!.id,          // ⚠️ snake_case
+};
 
-    if (customer) {
-      dispatch({ type: 'UPDATE_CUSTOMER', payload: customerData });
-    } else {
-      dispatch({ type: 'ADD_CUSTOMER', payload: customerData });
-    }
+// Se customer existir, UPDATE, senão INSERT:
+let res, error;
+if (customer) {
+  const up = await supabase
+    .from<Customer>('customers')
+    .update(payload)
+    .eq('id', customer.id)
+    .select()
+    .single();
+  res   = up.data;
+  error = up.error;
+} else {
+  const ins = await supabase
+    .from<Customer>('customers')
+    .insert(payload)
+    .select()
+    .single();
+  res   = ins.data;
+  error = ins.error;
+}
 
-    onClose();
-  };
+if (error) {
+  setErrors({ submit: error.message });
+  return;
+}
+
+// Dispatch correto:
+dispatch({
+  type: customer ? 'UPDATE_CUSTOMER' : 'ADD_CUSTOMER',
+  payload: res!
+});
+
+onSave?.();
+onClose();
+}
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">

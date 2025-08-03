@@ -3,6 +3,9 @@ import { X, User, Award, Plus, Minus, Trash2, Search } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
 import { PointsTransaction } from '../../types';
 import { generateId } from '../../utils/helpers';
+import { supabase } from '../../lib/supabase';
+
+
 
 interface PointsManagementFormProps {
   onClose: () => void;
@@ -85,53 +88,69 @@ export default function PointsManagementForm({ onClose }: PointsManagementFormPr
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!validate()) return;
+  const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!validate()) return;
 
-    const customer = state.customers.find(c => c.id === formData.customerId);
-    if (!customer) return;
+  // 1) encontra o cliente
+  const customer = state.customers.find(c => c.id === formData.customerId)!;
+  let pointsDelta = Number(formData.points);
+  let newBalance = customer.points;
+  let txType: 'credit' | 'debit';
 
-    let points = Number(formData.points);
-    let newPoints = customer.points;
-    let transactionType = formData.type;
-    
-    if (formData.type === 'remove_all') {
-      points = customer.points;
-      newPoints = 0;
-      transactionType = 'debit';
-    } else {
-      newPoints = formData.type === 'credit' 
-        ? customer.points + points 
-        : customer.points - points;
-    }
+  if (formData.type === 'remove_all') {
+    pointsDelta = customer.points;
+    newBalance = 0;
+    txType = 'debit';
+  } else if (formData.type === 'credit') {
+    newBalance = customer.points + pointsDelta;
+    txType = 'credit';
+  } else { // debit
+    newBalance = customer.points - pointsDelta;
+    txType = 'debit';
+  }
 
-    // Update customer points
-    const updatedCustomer = {
-      ...customer,
-      points: newPoints,
-    };
+  try {
+    // 2) atualiza o saldo no Supabase
+    const { data: updatedCust, error: updErr } = await supabase
+      .from<Customer>('customers')
+      .update({ points: newBalance })
+      .eq('id', customer.id)
+      .select('*')
+      .single();
+    if (updErr || !updatedCust) throw updErr || new Error('Falha ao atualizar cliente');
 
-    // Create transaction
-    const transaction: PointsTransaction = {
-      id: generateId(),
-      companyId: state.currentCompany?.id || '',
-      customerId: customer.id,
-      customerName: customer.name,
-      type: transactionType,
-      points,
-      description: formData.type === 'remove_all' 
-        ? `Remoção total de pontos: ${formData.description.trim()}`
-        : formData.description.trim(),
-      date: new Date(),
-    };
+    // 3) insere a transação
+    const { data: newTx, error: txErr } = await supabase
+  .from('points_transactions')
+  .insert({
+    // id: generateId(),        // <-- removido
+    company_id:    state.currentCompany!.id,
+    customer_id:   customer.id,
+    customer_name: customer.name,
+    type:          txType,
+    points:        pointsDelta,
+    description:   formData.description.trim(),
+    date:          new Date()
+  })
+  .select('*')
+  .single();
 
-    dispatch({ type: 'UPDATE_CUSTOMER', payload: updatedCustomer });
-    dispatch({ type: 'ADD_POINTS_TRANSACTION', payload: transaction });
+    if (txErr || !newTx) throw txErr || new Error('Falha ao registrar transação');
 
+    // 4) atualiza o estado global
+    dispatch({ type: 'UPDATE_CUSTOMER', payload: updatedCust });
+    dispatch({ type: 'ADD_POINTS_TRANSACTION', payload: newTx });
+
+    // 5) fecha modal
+    alert('Pontos atualizados com sucesso!');
     onClose();
-  };
+
+  } catch (err: any) {
+    console.error(err);
+    alert('Erro ao gerenciar pontos: ' + err.message);
+  }
+};
 
   const selectedCustomer = state.customers.find(c => c.id === formData.customerId);
 

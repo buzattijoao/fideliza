@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { X, CreditCard, Users, Package, DollarSign, Plus, Trash2 } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
 import { Plan } from '../../types';
-import { generateId } from '../../utils/helpers';
+import { supabase } from '../../lib/supabase';
 
 interface PlanFormProps {
   plan?: Plan;
@@ -13,10 +13,10 @@ export default function PlanForm({ plan, onClose }: PlanFormProps) {
   const { dispatch } = useApp();
   const [formData, setFormData] = useState({
     name: plan?.name || '',
-    maxCustomers: plan?.maxCustomers || 0,
-    maxProducts: plan?.maxProducts || 0,
-    price: plan?.price || 0,
-    features: plan?.features || [''],
+    maxCustomers: plan?.maxCustomers ?? 0, // Use ?? para garantir número
+    maxProducts: plan?.maxProducts ?? 0,
+    price: plan?.price ?? 0,
+    features: plan?.features ?? [''],
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -27,13 +27,8 @@ export default function PlanForm({ plan, onClose }: PlanFormProps) {
     if (type === 'number') {
       finalValue = Number(value);
     }
-
     setFormData(prev => ({ ...prev, [name]: finalValue }));
-    
-    // Clear error when user starts typing
-    if (errors[name]) {
-      setErrors(prev => ({ ...prev, [name]: '' }));
-    }
+    if (errors[name]) setErrors(prev => ({ ...prev, [name]: '' }));
   };
 
   const handleFeatureChange = (index: number, value: string) => {
@@ -56,54 +51,110 @@ export default function PlanForm({ plan, onClose }: PlanFormProps) {
   const validate = () => {
     const newErrors: Record<string, string> = {};
 
-    if (!formData.name.trim()) {
-      newErrors.name = 'Nome do plano é obrigatório';
-    }
-
-    if (formData.maxCustomers < -1 || formData.maxCustomers === 0) {
+    if (!formData.name.trim()) newErrors.name = 'Nome do plano é obrigatório';
+    if (formData.maxCustomers < -1 || formData.maxCustomers === 0)
       newErrors.maxCustomers = 'Número de clientes deve ser maior que 0 ou -1 para ilimitado';
-    }
-
-    if (formData.maxProducts < -1 || formData.maxProducts === 0) {
+    if (formData.maxProducts < -1 || formData.maxProducts === 0)
       newErrors.maxProducts = 'Número de produtos deve ser maior que 0 ou -1 para ilimitado';
-    }
-
-    if (formData.price <= 0) {
+    if (formData.price <= 0)
       newErrors.price = 'Preço deve ser maior que zero';
-    }
-
     const validFeatures = formData.features.filter(f => f.trim());
-    if (validFeatures.length === 0) {
+    if (validFeatures.length === 0)
       newErrors.features = 'Pelo menos uma funcionalidade é obrigatória';
-    }
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!validate()) return;
+  const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!validate()) return;
 
-    const planData: Plan = {
-      id: plan?.id || generateId(),
-      name: formData.name.trim(),
-      maxCustomers: formData.maxCustomers,
-      maxProducts: formData.maxProducts,
-      price: formData.price,
-      features: formData.features.filter(f => f.trim()),
-      createdAt: plan?.createdAt || new Date(),
-    };
-
-    if (plan) {
-      dispatch({ type: 'UPDATE_PLAN', payload: planData });
-    } else {
-      dispatch({ type: 'ADD_PLAN', payload: planData });
-    }
-
-    onClose();
+  // 1) Monta o payload em snake_case para o Supabase
+  const payload = {
+    name:          formData.name.trim(),
+    max_customers: Number(formData.maxCustomers),
+    max_products:  Number(formData.maxProducts),
+    price:         Number(formData.price),
+    features:      formData.features.filter(f => f.trim()),  // <-- array de strings
   };
+
+  let row: any = null;
+  let error: any = null;
+
+  if (plan) {
+    // Modo edição
+    console.log('Editando plano. ID usado:', plan.id);
+    console.log('→ payload de edição:', payload);
+
+    const updateRes = await supabase
+      .from('plans')
+      .update(payload)
+      .eq('id', plan.id)
+      .select()
+      .single();
+
+    console.log('→ updateRes.error (edição):', updateRes.error);
+
+    row   = updateRes.data;
+    error = updateRes.error;
+
+    if (!row) {
+      console.error(
+        'Nenhum plano encontrado com esse ID! ' +
+        'Confirme se o ID está correto e existe na tabela plans.'
+      );
+    }
+  } else {
+    // Modo criação
+    const insertRes = await supabase
+      .from('plans')
+      .insert(payload)
+      .select()
+      .single();
+
+    row   = insertRes.data;
+    error = insertRes.error;
+  }
+
+  // Se deu erro, exibe na UI e aborta
+  if (error) {
+    setErrors({ submit: error.message });
+    return;
+  }
+
+  // Se não retornou row por algum motivo
+  if (!row) {
+    setErrors({
+      submit: plan
+        ? 'Erro ao editar plano (nenhum plano encontrado).'
+        : 'Erro ao criar plano.'
+    });
+    return;
+  }
+
+  // Atualiza o estado global com o resultado
+  dispatch({
+    type: plan ? 'UPDATE_PLAN' : 'ADD_PLAN',
+    payload: {
+      id:           row.id,
+      name:         row.name,
+      maxCustomers: row.max_customers,
+      maxProducts:  row.max_products,
+      price:        row.price,
+      features:     row.features ?? [],      // <-- recebe diretamente o array
+      createdAt:    row.created_at
+                       ? new Date(row.created_at)
+                       : new Date(),
+    },
+  });
+
+  // Fecha o modal/form
+  onClose();
+};
+
+
+
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">

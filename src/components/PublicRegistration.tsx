@@ -1,8 +1,24 @@
 import React, { useState } from 'react';
-import { Building2, User, Phone, Mail, MapPin, CreditCard, Eye, EyeOff, CheckCircle } from 'lucide-react';
+import {
+  Building2,
+  User,
+  Phone,
+  Mail,
+  MapPin,
+  CreditCard,
+  Eye,
+  EyeOff,
+  CheckCircle
+} from 'lucide-react';
 import { useApp } from '../contexts/AppContext';
 import { Customer } from '../types';
-import { generateId, validateCPF, validateEmail, formatCPF, formatPhone, cleanPhone } from '../utils/helpers';
+import {
+  validateCPF,
+  validateEmail,
+  formatCPF,
+  formatPhone,
+  cleanPhone
+} from '../utils/helpers';
 
 interface PublicRegistrationProps {
   companySlug: string;
@@ -128,28 +144,69 @@ export default function PublicRegistration({ companySlug }: PublicRegistrationPr
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!validate()) return;
+  const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
 
-    const customerData: Customer = {
-      id: generateId(),
-      companyId: company.id,
-      name: formData.name.trim(),
-      cpf: formData.cpf,
-      email: formData.email.trim(),
-      phone: formData.phone,
-      address: formData.address.trim(),
-      birthDate: new Date(formData.birthDate),
-      points: 0,
-      password: formData.password,
-      createdAt: new Date(),
-    };
+  if (!validate()) return;
 
-    dispatch({ type: 'ADD_CUSTOMER', payload: customerData });
-    setIsRegistered(true);
+  // 1️⃣ Monte o payload. Ajuste os nomes de campo para o que seu Postgres espera:
+  const payload = {
+    company_id: company.id,
+    name:       formData.name.trim(),
+    cpf:        formData.cpf,
+    email:      formData.email.trim(),
+    phone:      cleanPhone(formData.phone),
+    address:    formData.address.trim() || null,
+    birth_date: formData.birthDate,
+    password:   formData.password,
+    points:     0
   };
+
+  try {
+    // 2️⃣ Chame a REST API do Supabase:
+    const res = await fetch(
+      `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/customers`,
+      {
+        method: 'POST',
+        headers: {
+          'apikey':        import.meta.env.VITE_SUPABASE_ANON_KEY!,
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY!}`,
+          'Content-Type':  'application/json',
+          'Prefer':        'return=representation'
+        },
+        body: JSON.stringify(payload)
+      }
+    );
+    if (!res.ok) throw new Error(`Falha ao cadastrar: ${res.status}`);
+
+    // 3️⃣ Pega o registro recém-criado (com o ID gerado pelo banco):
+    const [newCustomer] = await res.json();
+
+    // Mapeia snake_case → camelCase e converte datas
+      dispatch({
+        type: 'ADD_CUSTOMER',
+        payload: {
+          id:         newCustomer.id,
+          companyId:  newCustomer.company_id,
+          name:       newCustomer.name,
+          cpf:        newCustomer.cpf,
+          email:      newCustomer.email,
+          phone:      newCustomer.phone,
+          address:    newCustomer.address,
+          birthDate:  new Date(newCustomer.birth_date),
+          password:   newCustomer.password, // se estiver armazenando assim
+          points:     newCustomer.points,
+          createdAt:  new Date(newCustomer.created_at),
+        } as Customer
+      });
+
+    setIsRegistered(true);
+  } catch (err: any) {
+    console.error(err);
+    setErrors(prev => ({ ...prev, form: err.message }));
+  }
+};
+
 
   if (isRegistered) {
     return (

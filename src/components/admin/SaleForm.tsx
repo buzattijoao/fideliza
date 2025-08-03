@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
-import { X, ShoppingBag, DollarSign, FileText, User, Search } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Search, FileText, DollarSign } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
-import { Sale, PointsTransaction } from '../../types';
-import { generateId, formatCurrency } from '../../utils/helpers';
+import { Sale, PointsTransaction, Customer } from '../../types';
+import { formatCurrency } from '../../utils/helpers';
+import { supabase } from '../../lib/supabase';
 
 interface SaleFormProps {
   onClose: () => void;
@@ -10,7 +11,13 @@ interface SaleFormProps {
 
 export default function SaleForm({ onClose }: SaleFormProps) {
   const { state, dispatch } = useApp();
-  const companyPointsConfig = state.pointsConfigs.find(pc => pc.companyId === state.currentCompany?.id) || { reaisPerPoint: 10, companyId: state.currentCompany?.id || '' };
+  const companyId = state.currentCompany?.id!;
+  const companyPointsConfig = state.pointsConfigs.find(pc => pc.companyId === companyId)!
+    || { reaisPerPoint: 10, companyId };
+
+  // **1)** estado local para a lista vinda do banco
+  const [customers, setCustomers] = useState<Customer[]>([]);
+
   const [formData, setFormData] = useState({
     customerId: '',
     customerSearch: '',
@@ -20,233 +27,270 @@ export default function SaleForm({ onClose }: SaleFormProps) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+  // **2)** busca clientes da empresa ao montar o form
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await supabase
+        .from<Customer>('customers')
+        .select('id, name, cpf, email, points')
+        .eq('company_id', companyId)
+        .order('created_at', { ascending: false });
+      if (error) {
+        console.error('Erro ao carregar clientes:', error);
+      } else {
+        setCustomers(data);
+      }
+    })();
+  }, [companyId]);
+
+  const handleChange = (e: React.ChangeEvent<any>) => {
     const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
-    
-    // Clear error when user starts typing
-    if (errors[name]) {
-      setErrors(prev => ({ ...prev, [name]: '' }));
-    }
+    setFormData(f => ({ ...f, [name]: value }));
+    if (errors[name]) setErrors(e => ({ ...e, [name]: '' }));
   };
 
   const handleCustomerSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    setFormData(prev => ({ ...prev, customerSearch: value, customerId: '' }));
-    setShowCustomerDropdown(value.length > 0);
-    
-    if (errors.customerId) {
-      setErrors(prev => ({ ...prev, customerId: '' }));
-    }
+    const v = e.target.value;
+    setFormData(f => ({ ...f, customerSearch: v, customerId: '' }));
+    setShowCustomerDropdown(v.length > 0);
+    if (errors.customerId) setErrors(e => ({ ...e, customerId: '' }));
   };
 
-  const selectCustomer = (customer: any) => {
-    setFormData(prev => ({ 
-      ...prev, 
-      customerId: customer.id, 
-      customerSearch: `${customer.name} - ${customer.cpf}` 
+  const selectCustomer = (c: Customer) => {
+    setFormData(f => ({
+      ...f,
+      customerId: c.id,
+      customerSearch: `${c.name} – ${c.cpf}`,
     }));
     setShowCustomerDropdown(false);
   };
 
-  const filteredCustomers = state.customers
-    .filter(c => c.companyId === state.currentCompany?.id)
-    .filter(customer => {
-      const searchTerm = formData.customerSearch.toLowerCase();
-      return customer.name.toLowerCase().includes(searchTerm) ||
-             customer.cpf.includes(searchTerm) ||
-             customer.email.toLowerCase().includes(searchTerm);
+  // **3)** filtra pelo input sobre a lista `customers`
+  const filteredCustomers = customers
+    .filter(c => {
+      const term = formData.customerSearch.toLowerCase();
+      return (
+        c.name.toLowerCase().includes(term) ||
+        c.cpf.includes(term) ||
+        c.email.toLowerCase().includes(term)
+      );
     })
-    .slice(0, 10); // Limit to 10 results
+    .slice(0, 10);
 
   const validate = () => {
-    const newErrors: Record<string, string> = {};
-
-    if (!formData.customerId) {
-      newErrors.customerId = 'Cliente é obrigatório';
-    }
-
-    if (!formData.amount || Number(formData.amount) <= 0) {
-      newErrors.amount = 'Valor deve ser maior que zero';
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    const e: Record<string, string> = {};
+    if (!formData.customerId) e.customerId = 'Cliente é obrigatório';
+    if (!formData.amount || Number(formData.amount) <= 0) e.amount = 'Valor deve ser maior que zero';
+    setErrors(e);
+    return Object.keys(e).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!validate()) return;
+    const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!validate()) return;
 
-    const customer = state.customers.find(c => c.id === formData.customerId);
-    if (!customer) return;
+  // 1) Identifica o cliente selecionado
+  const customer = customers.find(c => c.id === formData.customerId)!;
 
-    const amount = Number(formData.amount);
-    const pointsEarned = Math.floor(amount / companyPointsConfig.reaisPerPoint);
+  // 2) Calcula valor e pontos
+  const amount = Number(formData.amount);
+  const pointsEarned = Math.floor(amount / companyPointsConfig.reaisPerPoint);
 
-    // Create sale
-    const sale: Sale = {
-      id: generateId(),
-      companyId: state.currentCompany?.id || '',
-      customerId: customer.id,
-      customerName: customer.name,
-      amount,
-      pointsEarned,
-      date: new Date(),
-      description: formData.description.trim(),
-    };
+  // 3) Insere a venda
+  const { data: saleData, error: saleErr } = await supabase
+    .from<Sale>('sales')
+    .insert({
+      customer_id:   customer.id,
+      customer_name: customer.name,
+      company_id:    companyId,
+      amount,           // se sua coluna for NUMERIC/INTEGER
+      points_earned: pointsEarned,
+      date:          new Date(),
+      description:   formData.description.trim() || null,
+    })
+    .select('*')
+    .single();
 
-    // Update customer points
-    const updatedCustomer = {
-      ...customer,
-      points: customer.points + pointsEarned,
-    };
+  if (saleErr || !saleData) {
+    console.error('Erro ao registrar venda:', saleErr);
+    setErrors({ submit: saleErr?.message || 'Erro ao salvar venda.' });
+    return;
+  }
 
-    // Create points transaction
-    const transaction: PointsTransaction = {
-      id: generateId(),
-      companyId: state.currentCompany?.id || '',
-      customerId: customer.id,
-      customerName: customer.name,
-      type: 'earned',
-      points: pointsEarned,
-      description: `Compra: ${formatCurrency(amount)}`,
-      date: new Date(),
-    };
+  // 4) Atualiza pontos do cliente
+  const { data: updatedCustomer, error: custErr } = await supabase
+    .from<Customer>('customers')
+    .update({ points: customer.points + pointsEarned })
+    .eq('id', customer.id)
+    .select('*')
+    .single();
 
-    dispatch({ type: 'ADD_SALE', payload: sale });
-    dispatch({ type: 'UPDATE_CUSTOMER', payload: updatedCustomer });
-    dispatch({ type: 'ADD_POINTS_TRANSACTION', payload: transaction });
+  if (custErr || !updatedCustomer) {
+    console.error('Erro ao atualizar pontos do cliente:', custErr);
+    setErrors({ submit: custErr?.message || 'Erro ao atualizar pontos.' });
+    return;
+  }
 
-    onClose();
-  };
+  // 5) Insere transação de pontos
+  const { data: txData, error: txErr } = await supabase
+    .from<PointsTransaction>('points_transactions')
+    .insert({
+      company_id:    companyId,
+      customer_id:   customer.id,
+      customer_name: customer.name,
+      type:          'earned',
+      points:        pointsEarned,
+      description:   `Compra: ${formatCurrency(amount)}`,
+      date:          new Date(),
+    })
+    .select('*')
+    .single();
 
-  const selectedCustomer = state.customers.find(c => c.id === formData.customerId);
-  const amount = Number(formData.amount) || 0;
-  const pointsToEarn = Math.floor(amount / companyPointsConfig.reaisPerPoint);
+  if (txErr || !txData) {
+    console.error('Erro ao registrar transação:', txErr);
+    setErrors({ submit: txErr?.message || 'Erro ao salvar transação.' });
+    return;
+  }
+
+  const newSale: Sale = {
+  id:            saleData.id,
+  customerId:    saleData.customer_id,
+  customerName:  saleData.customer_name,
+  amount:        Number(saleData.amount),
+  pointsEarned:  saleData.points_earned,
+  date:          saleData.date ? new Date(saleData.date) : new Date(),
+  description:   saleData.description ?? '',
+  companyId:     saleData.company_id,
+};
+
+dispatch({ type: 'ADD_SALE',               payload: newSale });
+dispatch({ type: 'UPDATE_CUSTOMER',        payload: updatedCustomer });
+dispatch({ type: 'ADD_POINTS_TRANSACTION', payload: txData });
+
+// fecha o modal
+onClose();
+};
+
+
+
+  const selectedCustomer = customers.find(c => c.id === formData.customerId);
+  const amt = Number(formData.amount) || 0;
+  const ptsToEarn = Math.floor(amt / companyPointsConfig.reaisPerPoint);
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
       <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-6 border-b border-gray-200">
-          <h2 className="text-xl font-bold text-gray-900">Nova Venda</h2>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
-          >
+        {/* cabeçalho */}
+        <div className="flex items-center justify-between p-6 border-b">
+          <h2 className="text-xl font-bold">Nova Venda</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
             <X className="w-6 h-6" />
           </button>
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-6">
+          {/* cliente */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Cliente *
-            </label>
+            <label className="block mb-2 font-medium">Cliente *</label>
             <div className="relative">
-              <Search className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+              <Search className="absolute left-3 top-3 text-gray-400" />
               <input
                 type="text"
                 value={formData.customerSearch}
                 onChange={handleCustomerSearch}
-                onFocus={() => setShowCustomerDropdown(formData.customerSearch.length > 0)}
-                className={`w-full pl-10 pr-3 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 transition-all ${
+                onFocus={() => setShowCustomerDropdown(true)}
+                className={`w-full pl-10 pr-3 py-3 border rounded-lg focus:ring-pink-500 ${
                   errors.customerId ? 'border-red-500' : 'border-gray-300'
                 }`}
                 placeholder="Busque por nome, CPF ou email..."
               />
-              
-              {showCustomerDropdown && filteredCustomers.length > 0 && (
-                <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
-                  {filteredCustomers.map(customer => (
-                    <button
-                      key={customer.id}
-                      type="button"
-                      onClick={() => selectCustomer(customer)}
-                      className="w-full px-4 py-3 text-left hover:bg-gray-50 border-b border-gray-100 last:border-b-0"
-                    >
-                      <div className="font-medium text-gray-900">{customer.name}</div>
-                      <div className="text-sm text-gray-500">
-                        {customer.cpf} • {customer.email} • {customer.points} pontos
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-              
-              {showCustomerDropdown && formData.customerSearch.length > 0 && filteredCustomers.length === 0 && (
-                <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg p-4 text-center text-gray-500">
-                  Nenhum cliente encontrado
+              {showCustomerDropdown && (
+                <div className="absolute z-10 w-full mt-1 bg-white border rounded-lg shadow max-h-60 overflow-y-auto">
+                  {filteredCustomers.length > 0 ? (
+                    filteredCustomers.map(c => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => selectCustomer(c)}
+                        className="w-full px-4 py-3 text-left hover:bg-gray-50 border-b last:border-b-0"
+                      >
+                        <div className="font-medium">{c.name}</div>
+                        <div className="text-sm text-gray-500">
+                          {c.cpf} • {c.email} • {c.points} pontos
+                        </div>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="p-4 text-center text-gray-500">Nenhum cliente encontrado</div>
+                  )}
                 </div>
               )}
             </div>
             {errors.customerId && <p className="mt-1 text-sm text-red-600">{errors.customerId}</p>}
           </div>
 
+          {/* valor */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Valor da Venda *
-            </label>
+            <label className="block mb-2 font-medium">Valor da Venda *</label>
             <div className="relative">
-              <DollarSign className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+              <DollarSign className="absolute left-3 top-3 text-gray-400" />
               <input
                 type="number"
                 name="amount"
                 value={formData.amount}
                 onChange={handleChange}
-                min="0"
-                step="0.01"
-                className={`w-full pl-10 pr-3 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 transition-all ${
+                className={`w-full pl-10 pr-3 py-3 border rounded-lg focus:ring-pink-500 ${
                   errors.amount ? 'border-red-500' : 'border-gray-300'
                 }`}
                 placeholder="0.00"
+                step="0.01"
+                min="0"
               />
             </div>
             {errors.amount && <p className="mt-1 text-sm text-red-600">{errors.amount}</p>}
           </div>
 
+          {/* descrição */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Descrição
-            </label>
+            <label className="block mb-2 font-medium">Descrição</label>
             <div className="relative">
-              <FileText className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+              <FileText className="absolute left-3 top-3 text-gray-400" />
               <textarea
                 name="description"
+                rows={3}
                 value={formData.description}
                 onChange={handleChange}
-                rows={3}
-                className="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 transition-all resize-none"
-                placeholder="Descrição da venda (opcional)"
+                className="w-full pl-10 pr-3 py-3 border rounded-lg focus:ring-pink-500"
+                placeholder="Descrição (opcional)"
               />
             </div>
           </div>
 
-          {amount > 0 && (
-            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-              <h3 className="font-medium text-green-800 mb-2">Resumo da Venda</h3>
-              <div className="space-y-1 text-sm text-green-700">
-                <p>Valor: {formatCurrency(amount)}</p>
-                <p>Pontos a ganhar: {pointsToEarn}</p>
-                {selectedCustomer && (
-                  <p>Pontos finais: {selectedCustomer.points + pointsToEarn}</p>
-                )}
-              </div>
+          {/* resumo */}
+          {amt > 0 && (
+            <div className="p-4 bg-green-50 border rounded-lg">
+              <p className="text-green-700">Valor: {formatCurrency(amt)}</p>
+              <p className="text-green-700">Pontos a ganhar: {ptsToEarn}</p>
+              {selectedCustomer && (
+                <p className="text-green-700">
+                  Total pontos: {selectedCustomer.points + ptsToEarn}
+                </p>
+              )}
             </div>
           )}
 
-          <div className="flex gap-3 pt-4">
+          {/* botões */}
+          <div className="flex gap-3">
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 px-4 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+              className="flex-1 py-3 border rounded-lg text-gray-700 hover:bg-gray-50"
             >
               Cancelar
             </button>
             <button
               type="submit"
-              className="flex-1 px-4 py-3 bg-gradient-to-r from-pink-500 to-orange-400 text-white rounded-lg hover:from-pink-600 hover:to-orange-500 transition-all transform hover:scale-105"
+              className="flex-1 py-3 bg-gradient-to-r from-pink-500 to-orange-400 text-white rounded-lg hover:from-pink-600 hover:to-orange-500"
             >
               Registrar Venda
             </button>

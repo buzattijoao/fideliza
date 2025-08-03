@@ -2,14 +2,15 @@ import React, { useState } from 'react';
 import { X, Package, FileText, Award, Image } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
 import { Product } from '../../types';
-import { generateId } from '../../utils/helpers';
+import { supabase } from '../../lib/supabase';
 
 interface ProductFormProps {
   product?: Product;
-  onClose: () => void;
+  onClose:  () => void;
+  onSave:   () => void;
 }
 
-export default function ProductForm({ product, onClose }: ProductFormProps) {
+export default function ProductForm({ product, onClose, onSave }: ProductFormProps) {
   const { state, dispatch } = useApp();
   const [formData, setFormData] = useState({
     name: product?.name || '',
@@ -51,30 +52,61 @@ export default function ProductForm({ product, onClose }: ProductFormProps) {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!validate()) return;
+  const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!validate()) return;
 
-    const productData: Product = {
-      id: product?.id || generateId(),
-      companyId: product?.companyId || state.currentCompany?.id || '',
-      name: formData.name.trim(),
-      description: formData.description.trim(),
-      pointsRequired: Number(formData.pointsRequired),
-      imageUrl: formData.imageUrl.trim() || undefined,
-      available: formData.available,
-      createdAt: product?.createdAt || new Date(),
-    };
-
-    if (product) {
-      dispatch({ type: 'UPDATE_PRODUCT', payload: productData });
-    } else {
-      dispatch({ type: 'ADD_PRODUCT', payload: productData });
-    }
-
-    onClose();
+  // 1) Monte o objeto no formato snake_case que a tabela espera
+  const payload = {
+    name:             formData.name.trim(),
+    description:      formData.description.trim(),
+    points_required:  Number(formData.pointsRequired),
+    image_url:        formData.imageUrl.trim() || null,
+    available:        formData.available,
+    company_id:       state.currentCompany?.id,
   };
+
+  let data: Product | null = null;
+  let error: any = null;
+
+  if (product) {
+    // 2a) Se for edição, faz UPDATE
+    const res = await supabase
+      .from<Product>('products')
+      .update(payload)
+      .eq('id', product.id)
+      .select()    // força o return da linha atualizada
+      .single();
+    data = res.data;
+    error = res.error;
+  } else {
+    // 2b) Se for criação, faz INSERT
+    const res = await supabase
+      .from<Product>('products')
+      .insert(payload)
+      .select()    // força o return do novo registro
+      .single();
+    data = res.data;
+    error = res.error;
+  }
+
+  if (error || !data) {
+    console.error('Erro ao salvar produto:', error);
+    setErrors({ submit: error?.message || 'Erro inesperado' });
+    return;
+  }
+
+  // 3) Dispatch usando o objeto que veio do banco
+  if (product) {
+    dispatch({ type: 'UPDATE_PRODUCT', payload: data });
+  } else {
+    dispatch({ type: 'ADD_PRODUCT', payload: data });
+  }
+
+  // 4) Recarrega a lista e fecha o modal
+  onSave();   // <<< aqui você recarrega os produtos no dashboard
+  onClose();  // <<< fecha o formulário
+};
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">

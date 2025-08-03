@@ -1,5 +1,17 @@
 import React, { createContext, useContext, useReducer, ReactNode, useEffect } from 'react';
-import { Customer, Product, Sale, PointsConfig, PointsTransaction, User, Company, Plan, LoyaltyRequest, WebhookConfig } from '../types';
+import { supabase } from '../lib/supabase';
+import {
+  Customer,
+  Product,
+  Sale,
+  PointsConfig,
+  PointsTransaction,
+  User,
+  Company,
+  Plan,
+  LoyaltyRequest,
+  WebhookConfig
+} from '../types';
 
 interface AppState {
   customers: Customer[];
@@ -16,33 +28,47 @@ interface AppState {
   isLoading: boolean;
 }
 
-type AppAction =
-  | { type: 'SET_LOADING'; payload: boolean }
-  | { type: 'SET_CURRENT_USER'; payload: User | null }
-  | { type: 'SET_CURRENT_COMPANY'; payload: Company | null }
-  | { type: 'ADD_CUSTOMER'; payload: Customer }
-  | { type: 'UPDATE_CUSTOMER'; payload: Customer }
-  | { type: 'DELETE_CUSTOMER'; payload: string }
-  | { type: 'ADD_PRODUCT'; payload: Product }
-  | { type: 'UPDATE_PRODUCT'; payload: Product }
-  | { type: 'DELETE_PRODUCT'; payload: string }
-  | { type: 'ADD_SALE'; payload: Sale }
-  | { type: 'UPDATE_POINTS_CONFIG'; payload: PointsConfig }
-  | { type: 'ADD_POINTS_TRANSACTION'; payload: PointsTransaction }
-  | { type: 'DELETE_POINTS_TRANSACTION'; payload: string }
-  | { type: 'DELETE_SALE'; payload: string }
-  | { type: 'DELETE_POINTS_CONFIG'; payload: string }
-  | { type: 'ADD_COMPANY'; payload: Company }
-  | { type: 'UPDATE_COMPANY'; payload: Company }
-  | { type: 'DELETE_COMPANY'; payload: string }
-  | { type: 'ADD_PLAN'; payload: Plan }
-  | { type: 'UPDATE_PLAN'; payload: Plan }
-  | { type: 'DELETE_PLAN'; payload: string }
-  | { type: 'ADD_LOYALTY_REQUEST'; payload: LoyaltyRequest }
-  | { type: 'UPDATE_LOYALTY_REQUEST'; payload: LoyaltyRequest }
-  | { type: 'DELETE_LOYALTY_REQUEST'; payload: string }
-  | { type: 'UPDATE_WEBHOOK_CONFIG'; payload: WebhookConfig }
-  | { type: 'INITIALIZE_DATA'; payload: Partial<AppState> };
+export type AppAction =
+  | { type: 'SET_LOADING';                payload: boolean }
+  | { type: 'SET_CURRENT_USER';           payload: User | null }
+  | { type: 'SET_CURRENT_COMPANY';        payload: Company | null }
+
+  | { type: 'SET_CUSTOMERS';              payload: Customer[] }
+  | { type: 'ADD_CUSTOMER';               payload: Customer }
+  | { type: 'UPDATE_CUSTOMER';            payload: Customer }
+  | { type: 'DELETE_CUSTOMER';            payload: string }
+
+  | { type: 'SET_PRODUCTS';               payload: Product[] }
+  | { type: 'ADD_PRODUCT';                payload: Product }
+  | { type: 'UPDATE_PRODUCT';             payload: Product }
+  | { type: 'DELETE_PRODUCT';             payload: string }
+
+  | { type: 'SET_SALES';                  payload: Sale[] }
+  | { type: 'ADD_SALE';                   payload: Sale }
+  | { type: 'DELETE_SALE';                payload: string }
+
+  | { type: 'UPDATE_POINTS_CONFIG';       payload: PointsConfig }
+  | { type: 'SET_POINTS_TRANSACTIONS';    payload: PointsTransaction[] }
+  | { type: 'ADD_POINTS_TRANSACTION';     payload: PointsTransaction }
+  | { type: 'DELETE_POINTS_TRANSACTION';  payload: string }
+  | { type: 'DELETE_POINTS_CONFIG';       payload: string }
+
+  | { type: 'SET_LOYALTY_REQUESTS';       payload: LoyaltyRequest[] }
+  | { type: 'ADD_LOYALTY_REQUEST';        payload: LoyaltyRequest }
+  | { type: 'UPDATE_LOYALTY_REQUEST';     payload: LoyaltyRequest }
+  | { type: 'DELETE_LOYALTY_REQUEST';     payload: string }
+
+  | { type: 'ADD_COMPANY';                payload: Company }
+  | { type: 'UPDATE_COMPANY';             payload: Company }
+  | { type: 'DELETE_COMPANY';             payload: string }
+
+  | { type: 'ADD_PLAN';                   payload: Plan }
+  | { type: 'UPDATE_PLAN';                payload: Plan }
+  | { type: 'DELETE_PLAN';                payload: string }
+
+  | { type: 'UPDATE_WEBHOOK_CONFIG';      payload: WebhookConfig }
+
+  | { type: 'INITIALIZE_DATA';            payload: Partial<AppState> };
 
 const defaultPlans: Plan[] = [
   {
@@ -50,27 +76,30 @@ const defaultPlans: Plan[] = [
     name: 'Starter',
     maxCustomers: 100,
     maxProducts: 10,
-    price: 49.90,
+    price: 49.9,
     features: ['100 clientes', '10 produtos', 'Suporte básico'],
     createdAt: new Date(),
+    planId: ''
   },
   {
     id: 'professional',
     name: 'Professional',
     maxCustomers: 500,
     maxProducts: 50,
-    price: 99.90,
+    price: 99.9,
     features: ['500 clientes', '50 produtos', 'Suporte prioritário', 'Relatórios avançados'],
     createdAt: new Date(),
+    planId: ''
   },
   {
     id: 'enterprise',
     name: 'Enterprise',
-    maxCustomers: -1, // Unlimited
-    maxProducts: -1, // Unlimited
-    price: 199.90,
+    maxCustomers: -1,
+    maxProducts: -1,
+    price: 199.9,
     features: ['Clientes ilimitados', 'Produtos ilimitados', 'Suporte 24/7', 'API personalizada'],
     createdAt: new Date(),
+    planId: ''
   },
 ];
 
@@ -101,10 +130,14 @@ function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case 'SET_LOADING':
       return { ...state, isLoading: action.payload };
+
     case 'SET_CURRENT_USER':
       return { ...state, currentUser: action.payload };
     case 'SET_CURRENT_COMPANY':
       return { ...state, currentCompany: action.payload };
+
+    case 'SET_CUSTOMERS':
+      return { ...state, customers: action.payload };
     case 'ADD_CUSTOMER':
       return { ...state, customers: [...state.customers, action.payload] };
     case 'UPDATE_CUSTOMER':
@@ -119,6 +152,9 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         customers: state.customers.filter(c => c.id !== action.payload),
       };
+
+    case 'SET_PRODUCTS':
+      return { ...state, products: action.payload };
     case 'ADD_PRODUCT':
       return { ...state, products: [...state.products, action.payload] };
     case 'UPDATE_PRODUCT':
@@ -133,8 +169,17 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         products: state.products.filter(p => p.id !== action.payload),
       };
+
+    case 'SET_SALES':
+      return { ...state, sales: action.payload };
     case 'ADD_SALE':
       return { ...state, sales: [...state.sales, action.payload] };
+    case 'DELETE_SALE':
+      return {
+        ...state,
+        sales: state.sales.filter(s => s.id !== action.payload),
+      };
+
     case 'UPDATE_POINTS_CONFIG':
       return {
         ...state,
@@ -144,6 +189,9 @@ function appReducer(state: AppState, action: AppAction): AppState {
             )
           : [...state.pointsConfigs, action.payload],
       };
+
+    case 'SET_POINTS_TRANSACTIONS':
+      return { ...state, pointsTransactions: action.payload };
     case 'ADD_POINTS_TRANSACTION':
       return {
         ...state,
@@ -154,44 +202,15 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         pointsTransactions: state.pointsTransactions.filter(t => t.id !== action.payload),
       };
-    case 'DELETE_SALE':
-      return {
-        ...state,
-        sales: state.sales.filter(s => s.id !== action.payload),
-      };
+
     case 'DELETE_POINTS_CONFIG':
       return {
         ...state,
         pointsConfigs: state.pointsConfigs.filter(pc => pc.companyId !== action.payload),
       };
-    case 'ADD_COMPANY':
-      return { ...state, companies: [...state.companies, action.payload] };
-    case 'UPDATE_COMPANY':
-      return {
-        ...state,
-        companies: state.companies.map(c =>
-          c.id === action.payload.id ? action.payload : c
-        ),
-      };
-    case 'DELETE_COMPANY':
-      return {
-        ...state,
-        companies: state.companies.filter(c => c.id !== action.payload),
-      };
-    case 'ADD_PLAN':
-      return { ...state, plans: [...state.plans, action.payload] };
-    case 'UPDATE_PLAN':
-      return {
-        ...state,
-        plans: state.plans.map(p =>
-          p.id === action.payload.id ? action.payload : p
-        ),
-      };
-    case 'DELETE_PLAN':
-      return {
-        ...state,
-        plans: state.plans.filter(p => p.id !== action.payload),
-      };
+
+    case 'SET_LOYALTY_REQUESTS':
+      return { ...state, loyaltyRequests: action.payload };
     case 'ADD_LOYALTY_REQUEST':
       return { ...state, loyaltyRequests: [...state.loyaltyRequests, action.payload] };
     case 'UPDATE_LOYALTY_REQUEST':
@@ -206,6 +225,37 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         loyaltyRequests: state.loyaltyRequests.filter(r => r.id !== action.payload),
       };
+
+    case 'ADD_COMPANY':
+      return { ...state, companies: [...state.companies, action.payload] };
+    case 'UPDATE_COMPANY':
+      return {
+        ...state,
+        companies: state.companies.map(c =>
+          c.id === action.payload.id ? action.payload : c
+        ),
+      };
+    case 'DELETE_COMPANY':
+      return {
+        ...state,
+        companies: state.companies.filter(c => c.id !== action.payload),
+      };
+
+    case 'ADD_PLAN':
+      return { ...state, plans: [...state.plans, action.payload] };
+    case 'UPDATE_PLAN':
+      return {
+        ...state,
+        plans: state.plans.map(p =>
+          p.id === action.payload.id ? action.payload : p
+        ),
+      };
+    case 'DELETE_PLAN':
+      return {
+        ...state,
+        plans: state.plans.filter(p => p.id !== action.payload),
+      };
+
     case 'UPDATE_WEBHOOK_CONFIG':
       return {
         ...state,
@@ -215,8 +265,10 @@ function appReducer(state: AppState, action: AppAction): AppState {
             )
           : [...state.webhookConfigs, action.payload],
       };
+
     case 'INITIALIZE_DATA':
       return { ...state, ...action.payload };
+
     default:
       return state;
   }
@@ -226,50 +278,181 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(appReducer, initialState);
 
   useEffect(() => {
-    // Load data from localStorage on mount
-    const savedData = localStorage.getItem('fidelizaAiData');
-    if (savedData) {
-      try {
-        const parsedData = JSON.parse(savedData);
-        
-        // Migrate existing customers to include birthDate if missing
-        if (parsedData.customers) {
-          parsedData.customers = parsedData.customers.map((customer: any) => ({
-            ...customer,
-            birthDate: customer.birthDate || new Date('1990-01-01'),
-          }));
-        }
-        
-        // Ensure default plans are always available
-        const dataWithPlans = {
-          ...parsedData,
-          plans: parsedData.plans?.length > 0 ? parsedData.plans : defaultPlans,
-        };
-        dispatch({ type: 'INITIALIZE_DATA', payload: dataWithPlans });
-      } catch (error) {
-        console.error('Error loading saved data:', error);
-        dispatch({ type: 'INITIALIZE_DATA', payload: { plans: defaultPlans } });
-      }
-    } else {
-      dispatch({ type: 'INITIALIZE_DATA', payload: { plans: defaultPlans } });
-    }
-  }, []);
+  async function initData() {
+    dispatch({ type: 'SET_LOADING', payload: true });
 
-  useEffect(() => {
-    // Save data to localStorage whenever state changes
-    const dataToSave = {
-      customers: state.customers,
-      products: state.products,
-      sales: state.sales,
-      pointsConfigs: state.pointsConfigs,
-      pointsTransactions: state.pointsTransactions,
-      companies: state.companies,
-      plans: state.plans,
-      loyaltyRequests: state.loyaltyRequests,
-      webhookConfigs: state.webhookConfigs,
-    };
-    localStorage.setItem('fidelizaAiData', JSON.stringify(dataToSave));
-  }, [state.customers, state.products, state.sales, state.pointsConfigs, state.pointsTransactions, state.companies, state.plans, state.loyaltyRequests, state.webhookConfigs]);
+    // 1) Fetch e map customers
+    const { data: customerRows, error: customerError } =
+      await supabase.from('customers').select('*');
+    if (customerError) console.error(customerError);
+    const customers =
+      customerRows?.map(c => ({
+        id:         c.id,
+        name:       c.name,
+        cpf:        c.cpf,
+        email:      c.email,
+        phone:      c.phone,
+        address:    c.address || undefined,
+        birthDate:  c.birth_date ? new Date(c.birth_date) : new Date(),
+        points:     c.points,
+        password:   c.password,
+        createdAt:  c.created_at ? new Date(c.created_at) : new Date(),
+        companyId:  c.company_id,
+      })) || [];
+
+    // 2) Fetch e map products
+    const { data: productRows, error: productError } =
+      await supabase.from('products').select('*');
+    if (productError) console.error(productError);
+    const products =
+      productRows?.map(p => ({
+        id:             p.id,
+        name:           p.name,
+        description:    p.description,
+        pointsRequired: p.points_required,
+        imageUrl:       p.image_url || undefined,
+        available:      p.available,
+        createdAt:      p.created_at ? new Date(p.created_at) : new Date(),
+        companyId:      p.company_id,
+      })) || [];
+
+    // 3) Fetch e map sales
+    const { data: saleRows, error: saleError } =
+      await supabase.from('sales').select('*');
+    if (saleError) console.error(saleError);
+    const sales =
+      saleRows?.map(s => ({
+        id:           s.id,
+        customerId:   s.customer_id,
+        customerName: s.customer_name,
+        amount:       parseFloat(s.amount),
+        pointsEarned: s.points_earned,
+        date:         s.date ? new Date(s.date) : new Date(),
+        description:  s.description || undefined,
+        companyId:    s.company_id,
+      })) || [];
+
+    // 4) Fetch e map plans
+    const { data: planRows, error: planError } =
+      await supabase.from('plans').select('*');
+    if (planError) console.error(planError);
+    const plans =
+      planRows?.map(p => ({
+        id:           p.id,
+        planId:       p.id,
+        name:         p.name,
+        maxCustomers: p.max_customers,
+        maxProducts:  p.max_products,
+        price:        Number(p.price),
+        features:     p.features,
+        createdAt:    p.created_at ? new Date(p.created_at) : new Date(),
+      })) || [];
+    //console.log('[DEBUG] planos mapeados:', plans);
+
+    // 5) Fetch e map companies
+    const { data: companyRows, error: companyError } =
+      await supabase.from('companies').select('*');
+    if (companyError) console.error('Erro ao carregar empresas:', companyError);
+    const companies =
+      companyRows?.map(c => ({
+        id:         c.id,
+        name:       c.name,
+        slug:       c.slug,
+        ownerName:  c.owner_name,
+        ownerEmail: c.owner_email,
+        password:   c.password,
+        planId:     c.plan_id,
+        isActive:   c.is_active,
+        createdAt:  c.created_at ? new Date(c.created_at) : new Date(),
+      })) || [];
+    //console.log('[DEBUG] empresas mapeadas:', companies);
+
+    // 7) pointsConfigs
+      const { data: pcRows, error: pcErr } = await supabase
+        .from('points_config')
+        .select('*');
+      if (pcErr) console.error(pcErr);
+      const pointsConfigs = pcRows?.map(pc => ({
+        companyId:     pc.company_id,
+        reaisPerPoint: pc.reais_per_point,
+      })) || [];
+
+      // 8) pointsTransactions
+      const { data: txRows, error: txErr } = await supabase
+        .from('points_transactions')
+        .select('*');
+      if (txErr) console.error(txErr);
+      const pointsTransactions = txRows?.map(tx => ({
+        id:           tx.id,
+        companyId:    tx.company_id,
+        customerId:   tx.customer_id,
+        customerName: tx.customer_name,
+        type:         tx.type,
+        points:       tx.points,
+        description:  tx.description,
+        date:         new Date(tx.date),
+      })) || [];
+
+      // 9) loyaltyRequests
+      const { data: lrRows, error: lrErr } = await supabase
+        .from('loyalty_requests')
+        .select('*');
+      if (lrErr) console.error(lrErr);
+      const loyaltyRequests = lrRows?.map(r => ({
+        id:                   r.id,
+        customerId:           r.customer_id,
+        customerName:         r.customer_name,
+        productId:            r.product_id,
+        productName:          r.product_name,
+        pointsUsed:           r.points_used,
+        customerPointsBefore: r.customer_points_before,
+        status:               r.status as any,
+        requestDate:          new Date(r.request_date),
+        processedDate:        r.processed_date   ? new Date(r.processed_date)   : undefined,
+        processedBy:          r.processed_by      ?? undefined,
+        expiresAt:            r.expires_at       ? new Date(r.expires_at)       : undefined,
+        companyId:            r.company_id,
+      })) || [];
+
+      // 10) webhookConfigs
+      const { data: wcRows, error: wcErr } = await supabase
+        .from('webhook_configs')
+        .select('*');
+      if (wcErr) console.error(wcErr);
+      const webhookConfigs = wcRows?.map(wc => ({
+        id:            wc.id,
+        companyId:     wc.company_id,
+        url:           wc.url,
+        secret:        wc.secret,
+        enabledEvents: wc.enabled_events,
+      })) || [];
+
+      dispatch({
+          type: 'INITIALIZE_DATA',
+          payload: {
+            customers,
+            products,
+            sales,
+            plans,
+            companies,
+            pointsConfigs,
+            pointsTransactions,
+            loyaltyRequests,
+            webhookConfigs,
+          },
+        });
+
+        // Se não havia currentCompany, joga a primeira empresa aqui:
+        if (companies.length > 0) {
+          dispatch({ type: 'SET_CURRENT_COMPANY', payload: companies[0] });
+        }
+
+        dispatch({ type: 'SET_LOADING', payload: false });
+     
+    }
+
+    initData();
+  }, []);  // ← certifica-se de fechar o useEffect aqui
 
   return (
     <AppContext.Provider value={{ state, dispatch }}>
@@ -277,6 +460,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     </AppContext.Provider>
   );
 }
+
+
 
 export const useApp = () => {
   const context = useContext(AppContext);

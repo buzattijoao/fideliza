@@ -19,7 +19,7 @@ import { useApp } from '../../contexts/AppContext';
 import CompanyForm from './CompanyForm';
 import PlanForm from './PlanForm';
 import { formatCurrency, formatDate } from '../../utils/helpers';
-import { checkSupabaseConnection } from '../../lib/supabase';
+import { checkSupabaseConnection, supabase } from '../../lib/supabase';
 
 export default function SuperAdminDashboard() {
   const { state, dispatch } = useApp();
@@ -29,7 +29,12 @@ export default function SuperAdminDashboard() {
   const [editingCompany, setEditingCompany] = useState(null);
   const [editingPlan, setEditingPlan] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [supabaseStatus, setSupabaseStatus] = useState<{connected: boolean, error: string | null} | null>(null);
+  const [supabaseStatus, setSupabaseStatus] = useState<{ connected: boolean; error: string | null } | null>(null);
+  const [empresasCount, setEmpresasCount] = useState<number>(0);
+  const [activeEmpresasCount, setActiveEmpresasCount] = useState<number>(0);
+  const [clientesCount, setClientesCount] = useState<number>(0);
+  const [receitaPotencial, setReceitaPotencial] = useState<number>(0);
+  
 
   useEffect(() => {
     const checkConnection = async () => {
@@ -38,6 +43,29 @@ export default function SuperAdminDashboard() {
     };
     
     checkConnection();
+    // Fetch dashboard metrics from Supabase
+    const fetchMetrics = async () => {
+      const { count: total } = await supabase.from('companies').select('*', { count: 'exact', head: true });
+      if (total != null) setEmpresasCount(total);
+      const { count: active } = await supabase.from('companies').select('*', { count: 'exact', head: true }).eq('is_active', true);
+      if (active != null) setActiveEmpresasCount(active);
+      const { count: clientes } = await supabase.from('customers').select('*', { count: 'exact', head: true });
+      if (clientes != null) setClientesCount(clientes);
+      const { data: emps } = await supabase.from('companies').select('plan_id').eq('is_active', true);
+      let rev = 0;
+      for (const e of emps) {
+        const { data: plan } = await supabase
+          .from('plans')
+          .select('price')
+         .eq('id', e.plan_id)
+          .single();
+        // forçar number e fallback a 0
+        const price = plan?.price ? Number(plan.price) : 0;
+        rev += price;
+      }
+      setReceitaPotencial(rev);
+    };
+    fetchMetrics();
     // Check connection every 30 seconds
     const interval = setInterval(checkConnection, 30000);
     
@@ -53,32 +81,32 @@ export default function SuperAdminDashboard() {
   const stats = [
     {
       label: 'Total de Empresas',
-      value: state.companies.length,
+      value: empresasCount,
       icon: Building2,
       color: 'text-blue-600',
       bgColor: 'bg-blue-100',
     },
     {
       label: 'Empresas Ativas',
-      value: state.companies.filter(c => c.isActive).length,
+      value: activeEmpresasCount,
       icon: Users,
       color: 'text-green-600',
       bgColor: 'bg-green-100',
     },
     {
       label: 'Total de Clientes',
-      value: state.customers.length,
+      value: clientesCount,
       icon: Users,
       color: 'text-purple-600',
       bgColor: 'bg-purple-100',
     },
     {
       label: 'Receita Potencial',
-      value: formatCurrency(state.companies.length * 99.90),
+      value: formatCurrency(receitaPotencial),
       icon: TrendingUp,
       color: 'text-orange-600',
       bgColor: 'bg-orange-100',
-    },
+   },
   ];
 
   const filteredCompanies = state.companies.filter(company =>
@@ -91,67 +119,106 @@ export default function SuperAdminDashboard() {
     plan.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const handleDeleteCompany = (companyId: string) => {
-    const company = state.companies.find(c => c.id === companyId);
-    if (!company) return;
+  const handleDeleteCompany = async (companyId: string) => {
+  const company = state.companies.find(c => c.id === companyId);
+  if (!company) return;
 
-    const companyCustomers = state.customers.filter(c => c.companyId === companyId);
-    const companyProducts = state.products.filter(p => p.companyId === companyId);
-    const companySales = state.sales.filter(s => s.companyId === companyId);
-    const companyTransactions = state.pointsTransactions.filter(t => t.companyId === companyId);
-    const companyRequests = state.loyaltyRequests.filter(r => r.companyId === companyId);
-    const companyPointsConfig = state.pointsConfigs.filter(pc => pc.companyId === companyId);
+  const companyCustomers = state.customers.filter(c => c.companyId === companyId);
+  const companyProducts = state.products.filter(p => p.companyId === companyId);
+  const companySales = state.sales.filter(s => s.companyId === companyId);
+  const companyTransactions = state.pointsTransactions.filter(t => t.companyId === companyId);
+  const companyRequests = state.loyaltyRequests.filter(r => r.companyId === companyId);
+  const companyPointsConfig = state.pointsConfigs.filter(pc => pc.companyId === companyId);
 
-    const confirmMessage = `ATENÇÃO: Tem certeza que deseja excluir a empresa "${company.name}"?\n\nEsta ação irá excluir PERMANENTEMENTE:\n- ${companyCustomers.length} cliente(s)\n- ${companyProducts.length} produto(s)\n- ${companySales.length} venda(s)\n- ${companyTransactions.length} transação(ões) de pontos\n- ${companyRequests.length} solicitação(ões)\n- Configurações de pontos\n\nTODOS OS DADOS SERÃO PERDIDOS!\nEsta operação NÃO PODE ser desfeita!\n\nDigite "EXCLUIR" para confirmar:`;
-    
-    const userInput = prompt(confirmMessage);
-    
-    if (userInput === 'EXCLUIR') {
-      // Delete all related data in the correct order
+  const confirmMessage = `ATENÇÃO: Tem certeza que deseja excluir a empresa "${company.name}"?\n\nEsta ação irá excluir PERMANENTEMENTE:\n- ${companyCustomers.length} cliente(s)\n- ${companyProducts.length} produto(s)\n- ${companySales.length} venda(s)\n- ${companyTransactions.length} transação(ões) de pontos\n- ${companyRequests.length} solicitação(ões)\n- Configurações de pontos\n\nTODOS OS DADOS SERÃO PERDIDOS!\nEsta operação NÃO PODE ser desfeita!\n\nDigite "EXCLUIR" para confirmar:`;
+  
+  const userInput = prompt(confirmMessage);
+
+  if (userInput === 'EXCLUIR') {
+    try {
+      // Se possível, faça primeiro no banco de dados (Supabase):
+      // Apague os filhos antes (ordem importa!)
+      await Promise.all([
+        ...companyRequests.map(r => supabase.from('loyalty_requests').delete().eq('id', r.id)),
+        ...companyTransactions.map(t => supabase.from('points_transactions').delete().eq('id', t.id)),
+        ...companySales.map(s => supabase.from('sales').delete().eq('id', s.id)),
+        ...companyProducts.map(p => supabase.from('products').delete().eq('id', p.id)),
+        ...companyCustomers.map(c => supabase.from('customers').delete().eq('id', c.id)),
+        ...companyPointsConfig.map(pc => supabase.from('points_configs').delete().eq('company_id', pc.companyId)),
+      ]);
+      // Agora apague a empresa no banco
+      await supabase.from('companies').delete().eq('id', companyId);
+
+      // Agora sim, limpa localmente
       companyRequests.forEach(request => {
         dispatch({ type: 'DELETE_LOYALTY_REQUEST', payload: request.id });
       });
-      
       companyTransactions.forEach(transaction => {
         dispatch({ type: 'DELETE_POINTS_TRANSACTION', payload: transaction.id });
       });
-      
       companySales.forEach(sale => {
         dispatch({ type: 'DELETE_SALE', payload: sale.id });
       });
-      
       companyProducts.forEach(product => {
         dispatch({ type: 'DELETE_PRODUCT', payload: product.id });
       });
-      
       companyCustomers.forEach(customer => {
         dispatch({ type: 'DELETE_CUSTOMER', payload: customer.id });
       });
-      
       companyPointsConfig.forEach(config => {
         dispatch({ type: 'DELETE_POINTS_CONFIG', payload: config.companyId });
       });
-
-      // Finally delete the company
       dispatch({ type: 'DELETE_COMPANY', payload: companyId });
-      
-      alert('Empresa excluída com sucesso!');
-    } else if (userInput !== null) {
-      alert('Operação cancelada. Digite exatamente "EXCLUIR" para confirmar a exclusão.');
-    }
-  };
 
-  const handleDeletePlan = (planId: string) => {
-    const companiesUsingPlan = state.companies.filter(c => c.planId === planId);
-    if (companiesUsingPlan.length > 0) {
-      alert('Não é possível excluir este plano pois existem empresas utilizando-o.');
-      return;
+      alert('Empresa excluída com sucesso!');
+    } catch (err) {
+      alert('Erro ao excluir dados no banco: ' + err.message);
     }
-    
-    if (window.confirm('Tem certeza que deseja excluir este plano?')) {
-      dispatch({ type: 'DELETE_PLAN', payload: planId });
-    }
-  };
+  } else if (userInput !== null) {
+    alert('Operação cancelada. Digite exatamente "EXCLUIR" para confirmar a exclusão.');
+  }
+};
+
+
+  // SuperAdminDashboard.tsx
+
+const handleDeletePlan = async (planId: string) => {
+  // 1) checa se há empresas usando
+  const inUse = state.companies.some(c => c.planId === planId);
+  if (inUse) {
+    alert('Não é possível excluir este plano pois existem empresas utilizando-o.');
+    return;
+  }
+
+  // 2) confirma com o usuário
+  if (!window.confirm('Tem certeza que deseja excluir este plano?')) {
+    return;
+  }
+
+  // 3) dispara o DELETE e seleciona o que foi apagado
+  const { data, error, count } = await supabase
+    .from('plans')
+    .delete({ returning: 'representation' })  // pede para retornar os dados deletados
+    .eq('id', planId)
+    .select();                               // sem isso, às vezes o supabase-js não faz o request
+
+  console.log('→ deleteRes.data:', data);
+  console.log('→ deleteRes.error:', error);
+  console.log('→ deleteRes.count:', count);
+
+  // 4) trata o resultado
+  if (error) {
+    alert('Erro ao excluir plano: ' + error.message);
+  } else if (!data || data.length === 0) {
+    alert('Nenhum registro deletado. Verifique se o ID existe e sua policy no Supabase.');
+  } else {
+    dispatch({ type: 'DELETE_PLAN', payload: planId });
+    alert('Plano excluído com sucesso!');
+  }
+};
+
+
+
 
   const toggleCompanyStatus = (company: any) => {
     const updatedCompany = { ...company, isActive: !company.isActive };
@@ -278,7 +345,7 @@ export default function SuperAdminDashboard() {
           {activeTab === 'companies' && (
             <div className="space-y-4">
               {filteredCompanies.map((company) => {
-                const plan = state.plans.find(p => p.planId === company.planId);
+                const plan = state.plans.find(p => p.id === company.planId);
                 const companyCustomers = state.customers.filter(c => c.companyId === company.id);
                 const companyProducts = state.products.filter(p => p.companyId === company.id);
                 
@@ -367,14 +434,14 @@ export default function SuperAdminDashboard() {
                       </div>
                       <div className="mt-2">
                         <div className="flex flex-wrap gap-1">
-                          {plan.features.map((feature, index) => (
-                            <span
-                              key={index}
-                              className="inline-flex items-center px-2 py-1 rounded text-xs bg-blue-100 text-blue-800"
-                            >
-                              {feature}
-                            </span>
-                          ))}
+                            {plan.features.map((feature, index) => (
+                              <span
+                                key={index}
+                                className="inline-flex items-center px-2 py-1 rounded text-xs bg-blue-100 text-blue-800"
+                              >
+                                {feature}
+                              </span>
+                            ))}
                         </div>
                       </div>
                     </div>

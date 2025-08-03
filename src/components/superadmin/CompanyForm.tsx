@@ -1,62 +1,86 @@
 import React, { useState } from 'react';
 import { X, Building2, User, Mail, Lock, CreditCard, Eye, EyeOff } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
-import { Company } from '../../types';
-import { generateId, validateEmail } from '../../utils/helpers';
+import { supabase } from '../../lib/supabase';
+import { Company } from '../../types/index.ts';
+import type { EmpresaRow } from '../../types/supabase';
+import {validateEmail } from '../../utils/helpers';
+
+// src/components/superadmin/CompanyForm.tsx
+
+interface FormData {
+  name: string;
+  slug: string;
+  ownerName: string;
+  ownerEmail: string;
+  password: string;
+  planId: string;
+  isActive: boolean;
+}
+
 
 interface CompanyFormProps {
   company?: Company;
   onClose: () => void;
 }
 
+
 export default function CompanyForm({ company, onClose }: CompanyFormProps) {
   const { state, dispatch } = useApp();
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<FormData>({
     name: company?.name || '',
     slug: company?.slug || '',
     ownerName: company?.ownerName || '',
-    ownerEmail: company?.ownerEmail || '',
+    ownerEmail:company?.ownerEmail|| '',
     password: company?.password || '',
-    planId: company?.planId || '',
-    isActive: company?.isActive !== false,
+    planId:    company?.planId   || '',
+    isActive:  company?.isActive !== false,
   });
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    const { name, value, type } = e.target;
-    let finalValue = value;
+  const handleChange = (
+  e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
+) => {
+  const target = e.target as HTMLInputElement;
+  const { name, type, value, checked } = target;
 
-    if (name === 'name' && !company) {
-      // Auto-generate slug from company name
-      const slug = value.toLowerCase()
-        .replace(/[^a-z0-9\s]/g, '')
-        .replace(/\s+/g, '-')
-        .replace(/-+/g, '-')
-        .replace(/^-|-$/g, '');
-      setFormData(prev => ({ ...prev, name: value, slug }));
-      return;
-    }
+  // 1) Checkbox (boolean) só para isActive
+  if (name === 'isActive' && type === 'checkbox') {
+    setFormData(prev => ({ ...prev, isActive: checked }));
+    if (errors.isActive) setErrors(prev => ({ ...prev, isActive: '' }));
+    return;
+  }
 
-    if (name === 'slug') {
-      // Clean slug
-      finalValue = value.toLowerCase()
-        .replace(/[^a-z0-9-]/g, '')
-        .replace(/-+/g, '-')
-        .replace(/^-|-$/g, '');
-    }
+  // 2) Campos de texto sempre string
+  let finalValue = value;
 
-    if (type === 'checkbox') {
-      finalValue = (e.target as HTMLInputElement).checked;
-    }
+  if (name === 'name' && !company) {
+    // auto-slug
+    const slug = value
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+    setFormData(prev => ({ ...prev, name: value, slug }));
+    if (errors.name)     setErrors(prev => ({ ...prev, name: '' }));
+    if (errors.slug)     setErrors(prev => ({ ...prev, slug: '' }));
+    return;
+  }
 
-    setFormData(prev => ({ ...prev, [name]: finalValue }));
-    
-    // Clear error when user starts typing
-    if (errors[name]) {
-      setErrors(prev => ({ ...prev, [name]: '' }));
-    }
-  };
+  if (name === 'slug') {
+    finalValue = value
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+  }
+
+  setFormData(prev => ({ ...prev, [name]: finalValue }));
+  if (errors[name]) setErrors(prev => ({ ...prev, [name]: '' }));
+};
+
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
@@ -89,9 +113,11 @@ export default function CompanyForm({ company, onClose }: CompanyFormProps) {
       newErrors.ownerEmail = 'Email inválido';
     } else {
       // Check if email is unique
-      const existingCompany = state.companies.find(c => 
+      // dentro de validate():
+      const existingCompany = state.companies.find(c =>
         c.ownerEmail === formData.ownerEmail && c.id !== company?.id
       );
+
       if (existingCompany) {
         newErrors.ownerEmail = 'Este email já está em uso';
       }
@@ -110,32 +136,116 @@ export default function CompanyForm({ company, onClose }: CompanyFormProps) {
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
+ 
+  const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!validate()) return;
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!validate()) return;
+  // --- 1) Pré‑check slug ---
+  const { data: slugExists, error: slugErr } = await supabase
+    .from('companies')
+    .select('id')
+    .eq('slug', formData.slug)
+    .maybeSingle();
+  if (slugErr) {
+    setErrors({ submit: 'Erro ao validar código da empresa.' });
+    return;
+  }
+  if (slugExists && slugExists.id !== company?.id) {
+    setErrors({ slug: 'Este código já está em uso' });
+    return;
+  }
 
-    const companyData: Company = {
-      id: company?.id || generateId(),
-      name: formData.name.trim(),
-      slug: formData.slug.trim(),
-      ownerName: formData.ownerName.trim(),
-      ownerEmail: formData.ownerEmail.trim(),
-      password: formData.password.trim(),
-      planId: formData.planId,
-      isActive: formData.isActive,
-      createdAt: company?.createdAt || new Date(),
-    };
+  // --- 2) Pré‑check owner_email ---
+  const { data: emailExists, error: emailErr } = await supabase
+    .from('companies')
+    .select('id')
+    .eq('owner_email', formData.ownerEmail)
+    .maybeSingle();
+  if (emailErr) {
+    setErrors({ submit: 'Erro ao validar e‑mail do proprietário.' });
+    return;
+  }
+  if (emailExists && emailExists.id !== company?.id) {
+    setErrors({ ownerEmail: 'Este e‑mail já está em uso' });
+    return;
+  }
 
-    if (company) {
-      dispatch({ type: 'UPDATE_COMPANY', payload: companyData });
-    } else {
-      dispatch({ type: 'ADD_COMPANY', payload: companyData });
-    }
-
-    onClose();
+  // --- 3) Monta payload ---
+  const payload: Partial<EmpresaRow> = {
+    name:        formData.name,
+    slug:        formData.slug,
+    owner_name:  formData.ownerName,
+    owner_email: formData.ownerEmail,
+    password:    formData.password,
+    plan_id:     formData.planId,
+    is_active:   formData.isActive,
   };
+
+  let row, error;
+
+  if (company) {
+    // *** EDITANDO ***
+    const updateRes = await supabase
+      .from<EmpresaRow>('companies')
+      .update(payload)
+      .eq('id', company.id)
+      .select()
+      .single();
+    row = updateRes.data;
+    error = updateRes.error;
+  } else {
+    // *** CRIANDO NOVA ***
+    const insertRes = await supabase
+      .from<EmpresaRow>('companies')
+      .insert(payload)
+      .select()
+      .single();
+    row = insertRes.data;
+    error = insertRes.error;
+  }
+
+  if (error) {
+    if (error.code === '23505') {
+      if (error.message.includes('companies_slug_key')) {
+        setErrors({ slug: 'Este código já está em uso' });
+        return;
+      }
+      if (error.message.includes('companies_owner_email_key')) {
+        setErrors({ ownerEmail: 'Este e‑mail já está em uso' });
+        return;
+      }
+    }
+    setErrors({ submit: error.message });
+    return;
+  }
+
+  if (!row) {
+    setErrors({ submit: company ? 'Erro ao editar empresa.' : 'Erro ao criar empresa.' });
+    return;
+  }
+
+  dispatch({
+    type: company ? 'UPDATE_COMPANY' : 'ADD_COMPANY',
+    payload: {
+      id:          row.id,
+      name:        row.name,
+      slug:        row.slug,
+      ownerName:   row.owner_name,
+      ownerEmail:  row.owner_email,
+      password:    row.password,
+      planId:      row.plan_id,
+      isActive:    row.is_active,
+      createdAt:   new Date(row.created_at),
+    },
+  });
+
+  onClose();
+};
+
+
+
+
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -283,7 +393,7 @@ export default function CompanyForm({ company, onClose }: CompanyFormProps) {
               >
                 <option value="">Selecione um plano</option>
                 {state.plans.map(plan => (
-                  <option key={plan.id} value={plan.id}>
+                  <option key={plan.planId} value={plan.planId}>
                     {plan.name} - R$ {plan.price.toFixed(2)}/mês
                   </option>
                 ))}

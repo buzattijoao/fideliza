@@ -33,12 +33,17 @@ import ProductForm from './ProductForm';
 import SaleForm from './SaleForm';
 import PointsConfigForm from './PointsConfigForm';
 import PointsManagementForm from './PointsManagementForm';
-import { formatCurrency, formatDate, getUpcomingBirthdays, formatBirthDate, getAge, generateId } from '../../utils/helpers';
+import { formatCurrency, formatDate, getUpcomingBirthdays, formatBirthDate, getAge } from '../../utils/helpers';
+//import { formatCurrency, formatDate, getUpcomingBirthdays, formatBirthDate, getAge, generateId } from '../../utils/helpers';
 import QRCodeModal from './QRCodeModal';
 import StatisticsModal from './StatisticsModal';
 import WebhookConfigModal from './WebhookConfigModal';
 import FinancialSaleForm from './FinancialSaleForm';
 import { LoyaltyRequest, Customer, PointsTransaction } from '../../types';
+import { supabase } from '../../lib/supabase';
+import { Sale, Product } from '../../types';
+
+
 
 export default function AdminDashboard() {
   const { state, dispatch } = useApp();
@@ -57,9 +62,204 @@ export default function AdminDashboard() {
   const [searchTerm, setSearchTerm] = useState('');
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [requestToReject, setRequestToReject] = useState(null);
+  const [editingSale, setEditingSale] = useState<Sale | null>(null);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
+  const [selectedProductId, setSelectedProductId]   = useState<string>('');
+  const [selectedProductByCustomer, setSelectedProductByCustomer] = useState<Record<string,string>>({});
+
+
+
 
   const currentCompany = state.currentCompany;
   const currentPlan = state.plans.find(p => p.id === currentCompany?.planId);
+
+  const fetchCompanyRequests = async () => {
+  if (!currentCompany) return;
+  const { data, error } = await supabase
+    .from('loyalty_requests')
+    .select('*')
+    .eq('company_id', currentCompany.id)
+    .order('request_date', { ascending: false });
+
+  if (!error && data) {
+    const requests: LoyaltyRequest[] = data.map(r => ({
+      id:                   r.id,
+      customerId:           r.customer_id,
+      customerName:         r.customer_name,
+      productId:            r.product_id,
+      productName:          r.product_name,
+      pointsUsed:           r.points_used,
+      customerPointsBefore: r.customer_points_before,
+      status:               r.status as any,
+      requestDate:          new Date(r.request_date),
+      processedDate:        r.processed_date ? new Date(r.processed_date) : undefined,
+      processedBy:          r.processed_by ?? undefined,
+      expiresAt:            r.expires_at   ? new Date(r.expires_at)   : undefined,
+      companyId:            r.company_id,
+    }));
+
+    dispatch({ type: 'SET_LOYALTY_REQUESTS', payload: requests });
+  }
+};
+
+  // 1) Função para buscar clientes da empresa
+  // 1) Buscar clientes
+const fetchCompanyCustomers = async () => {
+  if (!currentCompany) return;
+
+  const { data, error } = await supabase
+    .from('customers')
+    .select('*')
+    .eq('company_id', currentCompany.id)
+    .order('created_at', { ascending: false });
+
+  if (!error && data) {
+    const customers: Customer[] = data.map(c => ({
+      id:         c.id,
+      name:       c.name,
+      cpf:        c.cpf,
+      email:      c.email,
+      phone:      c.phone,
+      address:    c.address ?? undefined,
+      birthDate:  c.birth_date ? new Date(c.birth_date) : new Date(),
+      points:     c.points,
+      password:   c.password,
+      createdAt:  c.created_at ? new Date(c.created_at) : new Date(),
+      companyId:  c.company_id,
+    }));
+    dispatch({ type: 'SET_CUSTOMERS', payload: customers });
+  }
+};
+
+// 2) Buscar produtos
+const fetchCompanyProducts = async () => {
+  if (!currentCompany) return;
+
+  const { data, error } = await supabase
+    .from('products')
+    .select('*')
+    .eq('company_id', currentCompany.id)
+    .order('created_at', { ascending: false });
+
+  if (!error && data) {
+    const products: Product[] = data.map(p => ({
+      id:             p.id,
+      name:           p.name,
+      description:    p.description,
+      pointsRequired: p.points_required,
+      imageUrl:       p.image_url ?? undefined,
+      available:      p.available,
+      createdAt:      p.created_at ? new Date(p.created_at) : new Date(),
+      companyId:      p.company_id,
+    }));
+    dispatch({ type: 'SET_PRODUCTS', payload: products });
+  }
+};
+
+// 3) Buscar vendas
+const fetchCompanySales = async () => {
+  if (!currentCompany) return;
+
+  const { data, error } = await supabase
+    .from('sales')
+    .select('*')
+    .eq('company_id', currentCompany.id)
+    .order('date', { ascending: false });
+
+  if (!error && data) {
+    const sales: Sale[] = data.map(s => ({
+      id:           s.id,
+      customerId:   s.customer_id,
+      customerName: s.customer_name,
+      amount:       parseFloat(s.amount),
+      pointsEarned: s.points_earned,
+      date:         s.date ? new Date(s.date) : new Date(),
+      description:  s.description ?? '',
+      companyId:    s.company_id,
+    }));
+    dispatch({ type: 'SET_SALES', payload: sales });
+  }
+};
+
+
+  // 1.4) Função para buscar transações de pontos da empresa
+const fetchCompanyTransactions = async () => {
+  if (!currentCompany) return;
+
+  const { data, error } = await supabase
+    .from('points_transactions')
+    .select('*')
+    .eq('company_id', currentCompany.id)
+    .order('date', { ascending: false });
+
+  if (!error && data) {
+    const transactions: PointsTransaction[] = data.map(t => ({
+      id:            t.id,
+      companyId:     t.company_id,
+      customerId:    t.customer_id,
+      customerName:  t.customer_name,
+      type:          t.type,
+      points:        t.points,
+      description:   t.description ?? '',
+      date:          t.date ? new Date(t.date) : new Date(),
+    }));
+    dispatch({ type: 'SET_POINTS_TRANSACTIONS', payload: transactions });
+  } else if (error) {
+    console.error('Erro ao buscar transações:', error);
+  }
+};
+
+
+
+
+ useEffect(() => {
+  if (!currentCompany) return;
+
+  const channel = supabase
+    .channel('loyalty_requests')
+    .on('postgres_changes', {
+        event:    'INSERT',
+        schema:   'public',
+        table:    'loyalty_requests',
+        filter:   `company_id=eq.${currentCompany.id}`
+      },
+      ({ new: r }) => {
+        // faz o mesmo mapeamento de r para LoyaltyRequest…
+        const mapped: LoyaltyRequest = {
+          id:                   r.id,
+          customerId:           r.customer_id,
+          customerName:         r.customer_name,
+          productId:            r.product_id,
+          productName:          r.product_name,
+          pointsUsed:           r.points_used,
+          customerPointsBefore: r.customer_points_before,
+          status:               r.status as any,
+          requestDate:          new Date(r.request_date),
+          processedDate:        r.processed_date ? new Date(r.processed_date) : undefined,
+          processedBy:          r.processed_by ?? undefined,
+          expiresAt:            r.expires_at   ? new Date(r.expires_at)   : undefined,
+          companyId:            r.company_id,
+        };
+        dispatch({ type: 'ADD_LOYALTY_REQUEST', payload: mapped });
+      }
+    )
+    .subscribe();
+
+  return () => { supabase.removeChannel(channel); };
+}, [currentCompany?.id, dispatch]);
+
+  // dispara só uma vez, ao montar
+useEffect(() => {
+  if (!currentCompany) return;
+  fetchCompanyCustomers();
+  fetchCompanyProducts();
+  fetchCompanySales();
+  fetchCompanyRequests();
+  fetchCompanyTransactions();
+}, [currentCompany]);
+
+
+  
   
   if (!currentCompany || !currentPlan) {
     return (
@@ -116,7 +316,6 @@ export default function AdminDashboard() {
       
       switch (request.status) {
         case 'approved':
-        case 'available_for_pickup':
           stats.approvedRequests++;
           break;
         case 'rejected':
@@ -142,9 +341,20 @@ export default function AdminDashboard() {
   const todayBirthdays = upcomingBirthdays.filter(c => c.daysUntilBirthday === 0);
   const nextWeekBirthdays = upcomingBirthdays.filter(c => c.daysUntilBirthday <= 7 && c.daysUntilBirthday > 0);
 
+  const maxCustomersDisplay = currentPlan.maxCustomers < 0
+  ? '∞'
+  : currentPlan.maxCustomers;
+  const maxProductsDisplay = currentPlan.maxProducts < 0
+  ? '∞'
+  : currentPlan.maxProducts;
+
   // Check plan limits
-  const isCustomerLimitReached = currentPlan.maxCustomers !== -1 && companyCustomers.length >= currentPlan.maxCustomers;
-  const isProductLimitReached = currentPlan.maxProducts !== -1 && companyProducts.length >= currentPlan.maxProducts;
+  const isCustomerLimitReached =
+  currentPlan.maxCustomers > 0 &&
+  companyCustomers.length >= currentPlan.maxCustomers;
+  const isProductLimitReached =
+  currentPlan.maxProducts > 0 &&
+  companyProducts.length >= currentPlan.maxProducts;
 
   const tabs = [
     { id: 'customers', label: 'Clientes', icon: Users },
@@ -161,14 +371,14 @@ export default function AdminDashboard() {
   const stats = [
     {
       label: 'Total de Clientes',
-      value: `${companyCustomers.length}${currentPlan.maxCustomers !== -1 ? `/${currentPlan.maxCustomers}` : ''}`,
+      value: `${companyCustomers.length}/${maxCustomersDisplay}`,
       icon: Users,
       color: isCustomerLimitReached ? 'text-red-600' : 'text-blue-600',
       bgColor: isCustomerLimitReached ? 'bg-red-100' : 'bg-blue-100',
     },
     {
       label: 'Produtos Ativos',
-      value: `${companyProducts.filter(p => p.available).length}${currentPlan.maxProducts !== -1 ? `/${currentPlan.maxProducts}` : ''}`,
+      value: `${companyProducts.filter(p => p.available).length}/${maxProductsDisplay}`,
       icon: Gift,
       color: isProductLimitReached ? 'text-red-600' : 'text-green-600',
       bgColor: isProductLimitReached ? 'bg-red-100' : 'bg-green-100',
@@ -221,74 +431,125 @@ export default function AdminDashboard() {
     transaction.description.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const handleApproveRequest = (request: any) => {
-    const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + 24); // 24 hours from now
-    
-    const updatedRequest = {
-      ...request,
-      status: 'available_for_pickup' as const,
-      processedDate: new Date(),
-      processedBy: state.currentUser?.name || 'Admin',
-      expiresAt,
-    };
+  
 
-    dispatch({ type: 'UPDATE_LOYALTY_REQUEST', payload: updatedRequest });
-  };
+  // AdminDashboard.tsx (dentro do componente)
+const handleUpdatePointsConfig = async (newReaisPerPoint: number) => {
+  if (!currentCompany) return;
 
-  const handleRejectRequest = (request: LoyaltyRequest, shouldReturnPoints: boolean) => {
-  // 1) Se for para devolver pontos, atualiza o cliente e registra a transação
-  if (shouldReturnPoints) {
-    const customer = state.customers.find(c => c.id === request.customerId);
-    if (customer) {
-      // Atualiza saldo do cliente
-      const updatedCustomer: Customer = {
-        ...customer,
-        points: customer.points + request.pointsUsed,
-      };
-      dispatch({ type: 'UPDATE_CUSTOMER', payload: updatedCustomer });
+  // upsert: se já existir, atualiza; senão, insere
+  const { data, error } = await supabase
+    .from('points_config')
+    .upsert({
+      company_id:      currentCompany.id,
+      reais_per_point: newReaisPerPoint
+    })
+    .select('*')
+    .single();
 
-      // Cria registro de transação de crédito
-      const transaction: PointsTransaction = {
-        id: generateId(),
-        companyId: currentCompany.id,
-        customerId: customer.id,
-        customerName: customer.name,
-        type: 'credit',
-        points: request.pointsUsed,
-        description: `Devolução: ${request.productName} (solicitação rejeitada)`,
-        date: new Date(),
-      };
-      dispatch({ type: 'ADD_POINTS_TRANSACTION', payload: transaction });
-    }
+  if (error) {
+    console.error('Erro ao atualizar configuração de pontos:', error);
+    return alert('Não foi possível salvar a configuração.');
   }
 
-  // 2) Atualiza sempre o status da solicitação para 'rejected'
-  const updatedRequest: LoyaltyRequest = {
-    ...request,
-    status: 'rejected',
-    processedDate: new Date(),
-    processedBy: state.currentUser?.name || 'Admin',
-  };
-  dispatch({ type: 'UPDATE_LOYALTY_REQUEST', payload: updatedRequest });
+  // dispara no contexto
+  dispatch({
+    type: 'UPDATE_POINTS_CONFIG',
+    payload: {
+      companyId:    data.company_id,
+      reaisPerPoint: data.reais_per_point
+    }
+  });
 
-  // 3) Fecha o modal
+  setShowPointsConfig(false);
+};
+
+
+// (2) Rejeitar solicitação
+const handleRejectRequest = async (request: LoyaltyRequest, shouldReturnPoints: boolean) => {
+  // 1) se for devolver pontos
+  if (shouldReturnPoints) {
+    // busca saldo atual
+    const { data: customer, error: fetchErr } = await supabase
+      .from<Customer>('customers')
+      .select('id, points, name')
+      .eq('id', request.customerId)
+      .single();
+    if (fetchErr || !customer) return console.error(fetchErr);
+
+    // calcula e atualiza novo saldo
+    const newBalance = customer.points + request.pointsUsed;
+    const { data: updatedCust, error: updErr } = await supabase
+      .from<Customer>('customers')
+      .update({ points: newBalance })
+      .eq('id', customer.id)
+      .select('*')
+      .single();
+    if (updErr || !updatedCust) return console.error(updErr);
+    dispatch({ type: 'UPDATE_CUSTOMER', payload: updatedCust });
+
+    // registra transação de crédito
+    const { data: tx, error: txErr } = await supabase
+      .from<PointsTransaction>('points_transactions')
+      .insert({
+        company_id:    currentCompany.id,
+        customer_id:   customer.id,
+        customer_name: customer.name,
+        type:          'credit',
+        points:        request.pointsUsed,
+        description:   `Rejeição + Devolução: ${request.productName}`,
+        date:          new Date(),
+      })
+      .select('*')
+      .single();
+    if (txErr || !tx) return console.error(txErr);
+    dispatch({ type: 'ADD_POINTS_TRANSACTION', payload: tx });
+  }
+
+  // 2) atualiza status da solicitação como 'rejected'
+  const { data: updReq, error: reqErr } = await supabase
+    .from<LoyaltyRequest>('loyalty_requests')
+    .update({
+      status:         'rejected',
+      processed_date: new Date(),
+      processed_by:   state.currentUser?.name,
+    })
+    .eq('id', request.id)
+    .select('*')
+    .single();
+  if (reqErr || !updReq) return console.error(reqErr);
+  dispatch({ type: 'UPDATE_LOYALTY_REQUEST', payload: updReq });
+
+  // 3) limpa e fecha modal
   setShowRejectModal(false);
   setRequestToReject(null);
 };
 
-  const handleCompleteRequest = (request: any) => {
-    if (window.confirm('Marcar como concluído? O produto foi entregue ao cliente?')) {
-      const updatedRequest = {
-        ...request,
-        status: 'completed' as const,
-        processedDate: new Date(),
-        processedBy: state.currentUser?.name || 'Admin',
-      };
 
-      dispatch({ type: 'UPDATE_LOYALTY_REQUEST', payload: updatedRequest });
-    }
-  };
+  const handleCompleteRequest = async (request: LoyaltyRequest) => {
+  if (!window.confirm('Marcar como concluído? O produto foi entregue ao cliente?')) return;
+
+  const { data: updReq, error } = await supabase
+    .from<LoyaltyRequest>('loyalty_requests')
+    .update({
+      status:         'completed',
+      processed_date: new Date(),
+      processed_by:   state.currentUser?.name || 'Admin',
+    })
+    .eq('id', request.id)
+    .select('*')
+    .single();
+
+  if (error || !updReq) {
+    console.error('Erro ao concluir:', error);
+    return alert('Não foi possível marcar como concluído.');
+  }
+
+  // Ao invés de dispatch com updReq cru, faça:
+  await fetchCompanyRequests();
+}
+
+  
 
   const openRejectModal = (request: any) => {
     setRequestToReject(request);
@@ -300,7 +561,7 @@ export default function AdminDashboard() {
     const checkExpiredRequests = () => {
       const now = new Date();
       const expiredRequests = companyLoyaltyRequests.filter(
-        r => r.status === 'available_for_pickup' && 
+        r => r.status === 'approved' && 
              r.expiresAt && 
              new Date(r.expiresAt) <= now
       );
@@ -322,13 +583,24 @@ export default function AdminDashboard() {
     return () => clearInterval(interval);
   }, [companyLoyaltyRequests, dispatch]);
 
-  const handleDeleteCustomer = (customerId: string) => {
+  const handleDeleteCustomer = async (customerId: string) => {
     const customer = state.customers.find(c => c.id === customerId);
     if (!customer) return;
 
     const confirmMessage = `Tem certeza que deseja excluir o cliente "${customer.name}"?\n\nEsta ação irá:\n- Remover o cliente permanentemente\n- Excluir todas as vendas relacionadas\n- Excluir todas as transações de pontos\n- Excluir todas as solicitações de produtos\n\nEsta operação NÃO PODE ser desfeita!`;
     
     if (window.confirm(confirmMessage)) {
+
+         // 1) Deleta no Supabase
+   const { error: delErr } = await supabase
+     .from('customers')
+     .delete()
+     .eq('id', customerId);
+   if (delErr) {
+     console.error('Erro ao deletar cliente:', delErr);
+     return;
+   }
+
       // Remove related data
       const customerSales = state.sales.filter(s => s.customerId === customerId);
       const customerTransactions = state.pointsTransactions.filter(t => t.customerId === customerId);
@@ -352,7 +624,7 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleDeleteProduct = (productId: string) => {
+  const handleDeleteProduct = async (productId: string) => {
     const product = state.products.find(p => p.id === productId);
     if (!product) return;
 
@@ -372,6 +644,19 @@ export default function AdminDashboard() {
     confirmMessage += `\n\nEsta operação NÃO PODE ser desfeita!`;
     
     if (window.confirm(confirmMessage)) {
+
+   // 1) Deleta no Supabase (isso já cascata professionalmente se você criar FK com ON DELETE CASCADE,
+   //    senão você teria que deletar manualmente as loyalty_requests primeiro no banco)
+   const { error: delErr } = await supabase
+     .from('products')
+     .delete()
+     .eq('id', productId);
+   if (delErr) {
+     console.error('Erro ao deletar produto:', delErr);
+     return;
+   }
+
+
       // Delete related loyalty requests
       relatedRequests.forEach(request => {
         // If request is pending, return points to customer
@@ -407,11 +692,128 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleDeleteRequest = (request: any) => {
-    if (window.confirm('Tem certeza que deseja excluir esta solicitação?')) {
-      dispatch({ type: 'DELETE_LOYALTY_REQUEST', payload: request.id });
-    }
+
+const handleDeleteSale = async (saleId: string) => {
+  const sale = state.sales.find(s => s.id === saleId);
+  if (!sale) return;
+
+  if (!window.confirm(
+    `Remover venda de "${sale.customerName}"? Esta ação não pode ser desfeita.`
+  )) {
+    return;
+  }
+
+  // 1) Chama o Supabase para deletar do banco
+  const { data, error } = await supabase
+    .from('sales')
+    .delete()
+    .eq('id', saleId)
+    // inclua também a company_id se sua policy exigir:
+    .eq('company_id', currentCompany.id)
+    // sem o .select(), o Supabase não retorna erro de row-level security
+    .select('*');
+
+  // 2) Se der erro, mostra no console e alerta o usuário
+  if (error) {
+    console.error('Erro ao excluir venda no Supabase:', error);
+    alert(`❌ Não foi possível excluir a venda no servidor:\n${error.message}`);
+    return;
+  }
+
+  // 3) Se passou, atualiza a UI removendo do estado global
+  dispatch({ type: 'DELETE_SALE', payload: saleId });
+
+  // 4) Feedback
+  alert('✅ Venda excluída com sucesso!');
+};
+
+
+
+     // src/components/admin/AdminDashboard.tsx
+// …dentro do componente AdminDashboard, antes do `return(...)`…
+
+const handleCreateRequest = async (customer: Customer, product: Product) => {
+  const payload = {
+    customer_id:   customer.id,
+    customer_name: customer.name,
+    product_id:    product.id,
+    product_name:  product.name,
+    points_used:   product.pointsRequired,
+    status:        'pending' as const,
+    request_date:  new Date(),
+    company_id:    currentCompany!.id,
   };
+
+  const { data: insertedReq, error: insertErr } = await supabase
+    .from<LoyaltyRequest>('loyalty_requests')
+    .insert(payload)
+    .select('*')
+    .single();
+
+  if (insertErr) {
+    console.error('Erro ao criar solicitação:', insertErr);
+    return;
+  }
+
+  // recarrega do banco para garantir que o ID veio com hífens
+  await fetchCompanyRequests();
+};
+
+
+
+
+// dentro do AdminDashboard, antes do `return(...)`
+
+/** 1) Aprovar solicitação */
+// dentro do seu AdminDashboard.tsx, logo após a definição de fetchCompanyRequests()
+
+const handleApproveRequest = async (request: LoyaltyRequest) => {
+  // 1) calcula expiry
+  const expiresAt = new Date();
+  expiresAt.setHours(expiresAt.getHours() + 24);
+
+  // 2) persiste APPROVED + expires_at no Supabase
+  const { data: updReq, error } = await supabase
+    .from<LoyaltyRequest>('loyalty_requests')
+    .update({
+      status:         'approved',
+      processed_date: new Date(),
+      processed_by:   state.currentUser?.name,
+      expires_at:     expiresAt,
+    })
+    .eq('id', request.id)
+    .select('*')
+    .single();
+
+  if (error || !updReq) {
+    console.error('Erro ao aprovar:', error);
+    return alert('Não foi possível marcar como "Disponível para retirada".');
+  }
+
+  // 3) atualiza o estado global (ou refetch)
+  dispatch({ type: 'UPDATE_LOYALTY_REQUEST', payload: updReq });
+};
+
+  // dentro de AdminDashboard.tsx, junto com os outros handlers
+const handleDeleteRequest = async (request: LoyaltyRequest) => {
+  if (!window.confirm('Tem certeza que deseja excluir esta solicitação?')) return;
+
+  // 1) Deleta do Supabase
+  const { error } = await supabase
+    .from('loyalty_requests')
+    .delete()
+    .eq('id', request.id)
+    .eq('company_id', currentCompany!.id);
+
+  if (error) {
+    console.error('Erro ao excluir solicitação:', error);
+    return alert('❌ Não foi possível excluir a solicitação no servidor.');
+  }
+
+  // 2) Atualiza o estado local
+  dispatch({ type: 'DELETE_LOYALTY_REQUEST', payload: request.id });
+};
+
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -533,54 +935,101 @@ export default function AdminDashboard() {
           {/* Search and Actions */}
           {activeTab !== 'settings' && (
             <div className="flex justify-between items-center mb-6">
-              <div className="relative">
-                <Search className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Buscar..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 w-80"
-                />
-              </div>
+                  {/* Campo de Busca */}
+                  <div className="relative">
+                    <Search className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Buscar..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 w-80"
+                    />
+                  </div>
               <div className="flex space-x-3">
-                {activeTab === 'customers' && (
-                  <button
-                    onClick={() => setShowCustomerForm(true)}
-                    disabled={isCustomerLimitReached}
-                    className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-all ${
-                      isCustomerLimitReached
-                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                        : 'bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:from-blue-600 hover:to-purple-700'
-                    }`}
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Novo Cliente</span>
-                  </button>
-                )}
-                {activeTab === 'products' && (
-                  <button
-                    onClick={() => setShowProductForm(true)}
-                    disabled={isProductLimitReached}
-                    className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-all ${
-                      isProductLimitReached
-                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                        : 'bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:from-blue-600 hover:to-purple-700'
-                    }`}
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Novo Produto</span>
-                  </button>
-                )}
-                {activeTab === 'sales' && (
-                  <button
-                    onClick={() => setShowSaleForm(true)}
-                    className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg hover:from-blue-600 hover:to-purple-700 transition-all"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Nova Venda</span>
-                  </button>
-                )}
+                {/* Clientes */}
+                  {activeTab === 'customers' && (
+                    <>
+                      {/* Ações */}
+                      <div className="flex justify-end mb-4">
+                        <button
+                          onClick={() => {
+                            setEditingCustomer(null)
+                            setShowCustomerForm(true)
+                          }}
+                          disabled={isCustomerLimitReached}
+                          className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-all ${
+                            isCustomerLimitReached
+                              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                              : 'bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:from-blue-600 hover:to-purple-700'
+                          }`}
+                        >
+                          <Plus className="w-4 h-4" />
+                          <span>Novo Cliente</span>
+                        </button>
+                      </div>
+
+                      
+                    </>
+                  )}
+
+                  {/* Produtos */}
+                  {activeTab === 'products' && (
+                    <>
+                      {/* Ações */}
+                      <div className="flex justify-end mb-4">
+                        <button
+                          onClick={() => {
+                            setEditingProduct(null)
+                            setShowProductForm(true)
+                          }}
+                          disabled={isProductLimitReached}
+                          className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-all ${
+                            isProductLimitReached
+                              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                              : 'bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:from-blue-600 hover:to-purple-700'
+                          }`}
+                        >
+                          <Plus className="w-4 h-4" />
+                          <span>Novo Produto</span>
+                        </button>
+                      </div>
+
+                      {/* Conteúdo */}
+                      
+                    </>
+                  )}
+
+                  {/* Vendas */}
+                  {activeTab === 'sales' && (
+                    <>
+                      {/* Ações */}
+                      <div className="flex justify-end mb-4">
+                        <button
+                            onClick={() => {
+                              setEditingSale(null)
+                              setShowSaleForm(true)
+                            }}
+                            className={`
+                              flex items-center space-x-2
+                              px-4 py-2
+                              rounded-lg
+                              bg-gradient-to-r from-blue-500 to-purple-600
+                              text-white
+                              hover:from-blue-600 hover:to-purple-700
+                              transition-all
+                            `}
+                          >
+                            <Plus className="w-4 h-4" />
+                            <span>Nova Venda</span>
+                          </button>
+                      </div>
+
+                      {/* Conteúdo */}
+                      
+                    </>
+                  )}            
+                
                 {activeTab === 'financial' && (
                   <button
                     onClick={() => setShowFinancialSaleForm(true)}
@@ -620,11 +1069,15 @@ export default function AdminDashboard() {
                   </div>
                   <div className="flex space-x-2">
                     <button
-                      onClick={() => setEditingCustomer(customer)}
+                      onClick={() => {
+                        setEditingCustomer(customer);
+                        setShowCustomerForm(true);
+                      }}
                       className="p-2 text-gray-400 hover:text-blue-600 transition-colors"
                     >
                       <Edit className="w-4 h-4" />
                     </button>
+
                     <button
                       onClick={() => handleDeleteCustomer(customer.id)}
                       className="p-2 text-gray-400 hover:text-red-600 transition-colors"
@@ -658,9 +1111,14 @@ export default function AdminDashboard() {
                       </span>
                     </div>
                   </div>
+                    {/* Solicitação de produto */}
+                    
                   <div className="flex space-x-2">
                     <button
-                      onClick={() => setEditingProduct(product)}
+                      onClick={() => {
+                       setEditingProduct(product);
+                       setShowProductForm(true);
+                     }}
                       className="p-2 text-gray-400 hover:text-blue-600 transition-colors"
                     >
                       <Edit className="w-4 h-4" />
@@ -676,33 +1134,53 @@ export default function AdminDashboard() {
               ))}
             </div>
           )}
-
-          {activeTab === 'sales' && (
-            <div className="space-y-4">
-              {filteredSales.map((sale) => (
-                <div
-                  key={sale.id}
-                  className="bg-gray-50 rounded-lg p-4 flex items-center justify-between"
-                >
-                  <div className="flex-1">
-                    <h3 className="font-medium text-gray-900">{sale.customerName}</h3>
-                    <p className="text-sm text-gray-500">{sale.description}</p>
-                    <div className="flex items-center space-x-4 mt-2">
-                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                        {formatCurrency(sale.amount)}
-                      </span>
-                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                        +{sale.pointsEarned} pontos
-                      </span>
-                      <span className="text-xs text-gray-500">
-                        {formatDate(new Date(sale.date))}
-                      </span>
-                    </div>
+    
+           {activeTab === 'sales' && (
+        <div className="space-y-4">
+          {filteredSales.length > 0 ? (
+            filteredSales.map((sale) => (
+              <div
+                key={sale.id}
+                className="bg-gray-50 rounded-lg p-4 flex items-center justify-between"
+              >
+                {/* Detalhes da venda */}
+                <div className="flex-1">
+                  <h3 className="font-medium text-gray-900">{sale.customerName}</h3>
+                  <p className="text-sm text-gray-500">{sale.description}</p>
+                  <div className="flex items-center space-x-4 mt-2">
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                      {formatCurrency(sale.amount)}
+                    </span>
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                      +{sale.pointsEarned} pontos
+                    </span>
+                    <span className="text-xs text-gray-500">
+                      {formatDate(new Date(sale.date))}
+                    </span>
                   </div>
                 </div>
-              ))}
+
+                {/* Botão excluir */}
+                <div className="flex space-x-2">
+                  <button
+                    onClick={() => handleDeleteSale(sale.id)}
+                    className="p-2 text-gray-400 hover:text-red-600"
+                    title="Excluir Venda"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="text-center py-12 text-gray-500">
+              Nenhuma venda encontrada
             </div>
           )}
+        </div>
+      )}
+
 
           {activeTab === 'financial' && (
             <div className="space-y-4">
@@ -736,102 +1214,106 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {activeTab === 'requests' && (
-            <div className="space-y-4">
-              {companyLoyaltyRequests.map((request) => (
-                <div
-                  key={request.id}
-                  className={`rounded-lg p-4 flex items-center justify-between ${
-                    request.status === 'pending'
-                      ? 'bg-yellow-50 border border-yellow-200'
-                      : request.status === 'available_for_pickup'
-                      ? 'bg-blue-50 border border-blue-200'
-                      : request.status === 'completed'
-                      ? 'bg-green-50 border border-green-200'
-                      : 'bg-red-50 border border-red-200'
-                  }`}
-                >
-                  <div className="flex-1">
-                    <h3 className="font-medium text-gray-900">{request.customerName}</h3>
-                    <p className="text-sm text-gray-500">Produto: {request.productName}</p>
-                    <div className="flex items-center space-x-4 mt-2">
+           {activeTab === 'requests' && (
+              <div className="space-y-4">
+                {companyLoyaltyRequests.map((request) => (
+                  <div
+                    key={request.id}
+                    className={`
+                      rounded-lg p-4 flex flex-col sm:flex-row sm:items-center justify-between
+                      ${
+                        request.status === 'pending'
+                          ? 'bg-yellow-50 border border-yellow-200'
+                          : request.status === 'approved'
+                          ? 'bg-blue-50   border border-blue-200'
+                          : request.status === 'completed'
+                          ? 'bg-green-50  border border-green-200'
+                          : 'bg-red-50    border border-red-200'
+                      }
+                    `}
+                  >
+                    {/* Detalhes */}
+                    <div className="flex-1">
+                      <h3 className="font-medium text-gray-900">{request.customerName}</h3>
+                      <p className="text-sm text-gray-500">Produto: {request.productName}</p>
+                    </div>
+
+                    {/* Pontos e Status */}
+                    <div className="flex items-center space-x-2 mt-2 sm:mt-0">
                       <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                         {request.pointsUsed} pontos
                       </span>
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        request.status === 'pending'
-                          ? 'bg-yellow-100 text-yellow-800'
-                          : request.status === 'available_for_pickup'
-                          ? 'bg-blue-100 text-blue-800'
-                          : request.status === 'completed'
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-red-100 text-red-800'
-                      }`}>
-                        {request.status === 'pending' 
-                          ? 'Pendente' 
-                          : request.status === 'available_for_pickup' 
-                          ? 'Disponível para retirada' 
+                      <span
+                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                          request.status === 'pending'
+                            ? 'bg-yellow-100 text-yellow-800'
+                            : request.status === 'approved'
+                            ? 'bg-blue-100 text-blue-800'
+                            : request.status === 'completed'
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-red-100 text-red-800'
+                        }`}
+                      >
+                        {request.status === 'pending'
+                          ? 'Pendente'
+                          : request.status === 'approved'
+                          ? 'Disponível para retirada'
                           : request.status === 'completed'
                           ? 'Concluído'
                           : 'Rejeitado'}
                       </span>
-                      <span className="text-xs text-gray-500">
-                        {formatDate(new Date(request.requestDate))}
-                      </span>
-                      {request.status === 'available_for_pickup' && request.expiresAt && (
-                        <CountdownTimer expiresAt={new Date(request.expiresAt)} />
+                    </div>
+
+                    {/* Data e Countdown */}
+                    <div className="mt-2 sm:mt-0 sm:ml-4 text-xs text-gray-500">
+                      {formatDate(request.requestDate)}
+                      {request.status === 'approved' && request.expiresAt && (
+                        <div className="mt-1">
+                          <CountdownTimer expiresAt={request.expiresAt} />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Ações */}
+                    <div className="flex space-x-2 mt-2 sm:mt-0">
+                      {request.status === 'pending' && (
+                        <>
+                          <button
+                            onClick={() => handleApproveRequest(request)}
+                            className="p-2 text-green-600 hover:text-green-800"
+                          >
+                            <CheckCircle className="w-5 h-5" />
+                          </button>
+                          <button
+                            onClick={() => openRejectModal(request)}
+                            className="p-2 text-red-600 hover:text-red-800"
+                          >
+                            <XCircle className="w-5 h-5" />
+                          </button>
+                        </>
+                      )}
+                      {request.status === 'approved' && (
+                        <button
+                          onClick={() => handleCompleteRequest(request)}
+                          className="p-2 text-green-600 hover:text-green-800"
+                        >
+                          <CheckCircle className="w-5 h-5" />
+                        </button>
+                      )}
+                      {(request.status === 'rejected' || request.status === 'completed') && (
+                        <button
+                          onClick={() => handleDeleteRequest(request)}
+                          className="p-2 text-gray-400 hover:text-red-600"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       )}
                     </div>
                   </div>
-                  {request.status === 'pending' && (
-                    <div className="flex space-x-2">
-                      <button
-                        onClick={() => handleApproveRequest(request)}
-                        className="p-2 text-green-600 hover:text-green-800 transition-colors"
-                        title="Aprovar"
-                      >
-                        <CheckCircle className="w-5 h-5" />
-                      </button>
-                      <button
-                        onClick={() => openRejectModal(request)}
-                        className="p-2 text-red-600 hover:text-red-800 transition-colors"
-                        title="Rejeitar"
-                      >
-                        <XCircle className="w-5 h-5" />
-                      </button>
-                    </div>
-                  )}
-                  {request.status === 'available_for_pickup' && (
-                    <div className="flex space-x-2">
-                      <button
-                        onClick={() => handleCompleteRequest(request)}
-                        className="p-2 text-green-600 hover:text-green-800 transition-colors"
-                        title="Marcar como concluído"
-                      >
-                        <CheckCircle className="w-5 h-5" />
-                      </button>
-                    </div>
-                  )}
-                  {(request.status === 'rejected' || request.status === 'completed') && (
-                    <button
-                      onClick={() => handleDeleteRequest(request)}
-                      className="p-2 text-gray-400 hover:text-red-600 transition-colors"
-                      title="Excluir"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              ))}
+                ))}
+              </div>
+            )}         
 
-              {companyLoyaltyRequests.length === 0 && (
-                <div className="text-center py-12">
-                  <Package2 className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-                  <p className="text-gray-500">Nenhuma solicitação encontrada</p>
-                </div>
-              )}
-            </div>
-          )}
 
           {activeTab === 'recurrence' && (
             <div className="space-y-6">
@@ -939,34 +1421,53 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {activeTab === 'transactions' && (
-            <div className="space-y-4">
-              {filteredTransactions.map((transaction) => (
-                <div
-                  key={transaction.id}
-                  className="bg-gray-50 rounded-lg p-4 flex items-center justify-between"
-                >
-                  <div className="flex-1">
-                    <h3 className="font-medium text-gray-900">{transaction.customerName}</h3>
-                    <p className="text-sm text-gray-500">{transaction.description}</p>
-                    <div className="flex items-center space-x-4 mt-2">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        transaction.type === 'earned' || transaction.type === 'credit'
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-red-100 text-red-800'
-                      }`}>
-                        {transaction.type === 'earned' || transaction.type === 'credit' ? '+' : '-'}
-                        {transaction.points} pontos
-                      </span>
-                      <span className="text-xs text-gray-500">
-                        {formatDate(new Date(transaction.date))}
-                      </span>
-                    </div>
-                  </div>
+          {/* Transações */}
+            {activeTab === 'transactions' && (
+              <>
+                {/* Conteúdo: lista de transações */}
+                <div className="space-y-4">
+                  {filteredTransactions.length > 0 ? (
+                    filteredTransactions.map(tx => (
+                      <div
+                        key={tx.id}
+                        className="bg-white rounded-lg p-4 flex items-center justify-between shadow-sm"
+                      >
+                        <div className="flex-1">
+                          <h3 className="font-medium text-gray-900">
+                            {tx.customerName}
+                          </h3>
+                          <p className="text-sm text-gray-500">
+                            {tx.type === 'credit'
+                              ? 'Crédito de pontos'
+                              : 'Débito de pontos'}
+                          </p>
+                          <div className="mt-2 flex items-center space-x-2">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                                tx.type === 'credit'
+                                  ? 'bg-green-100 text-green-800'
+                                  : 'bg-red-100 text-red-800'
+                              }`}
+                            >
+                              {tx.type === 'credit' ? '+' : '-'}
+                              {tx.points} pontos
+                            </span>
+                            <span className="text-xs text-gray-400">
+                              {formatDate(new Date(tx.date))}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-center text-gray-500">
+                      Nenhuma transação encontrada.
+                    </p>
+                  )}
                 </div>
-              ))}
-            </div>
-          )}
+              </>
+            )}
+
 
           {activeTab === 'birthdays' && (
             <div className="space-y-6">
@@ -1144,70 +1645,88 @@ export default function AdminDashboard() {
       </div>
 
       {/* Modals */}
-      {showCustomerForm && (
-        <CustomerForm
-          customer={editingCustomer}
-          onClose={() => {
-            setShowCustomerForm(false);
-            setEditingCustomer(null);
-          }}
-        />
-      )}
+      {/* Modals */}
+{showCustomerForm && (
+  <CustomerForm
+    customer={editingCustomer}
+    onClose={() => {
+      setShowCustomerForm(false);
+      setEditingCustomer(null);
+    }}
+    onSave={() => {
+      fetchCompanyCustomers();
+      setShowCustomerForm(false);
+      setEditingCustomer(null);
+    }}
+  />
+)}
 
-      {showProductForm && (
-        <ProductForm
-          product={editingProduct}
-          onClose={() => {
-            setShowProductForm(false);
-            setEditingProduct(null);
-          }}
-        />
-      )}
+{showProductForm && (
+  <ProductForm
+    product={editingProduct}
+    onClose={() => {
+      setShowProductForm(false);
+      setEditingProduct(null);
+    }}
+    onSave={() => {
+      fetchCompanyProducts();
+      setShowProductForm(false);
+      setEditingProduct(null);
+    }}
+  />
+)}
 
-      {showSaleForm && (
-        <SaleForm onClose={() => setShowSaleForm(false)} />
-      )}
+{showSaleForm && (
+  <SaleForm
+    sale={editingSale}
+    onClose={() => setShowSaleForm(false)}
+    onSave={() => {
+      fetchCompanySales();
+      setShowSaleForm(false);
+      setEditingSale(null);
+    }}
+  />
+)}
 
-      {showFinancialSaleForm && (
-        <FinancialSaleForm onClose={() => setShowFinancialSaleForm(false)} />
-      )}
 
-      {showPointsConfig && (
-        <PointsConfigForm onClose={() => setShowPointsConfig(false)} />
-      )}
+{showFinancialSaleForm && (
+  <FinancialSaleForm
+    onClose={() => setShowFinancialSaleForm(false)}
+  />
+)}
 
-      {showPointsManagement && (
-        <PointsManagementForm onClose={() => setShowPointsManagement(false)} />
-      )}
+{showPointsConfig && (
+  <PointsConfigForm
+    defaultValue={companyPointsConfig.reaisPerPoint}  // valor que veio do state
+    onClose={() => setShowPointsConfig(false)}
+    onSave={handleUpdatePointsConfig}                 // seu upsert + dispatch
+  />
+)}
 
-      {editingCustomer && (
-        <CustomerForm
-          customer={editingCustomer}
-          onClose={() => setEditingCustomer(null)}
-        />
-      )}
 
-      {editingProduct && (
-        <ProductForm
-          product={editingProduct}
-          onClose={() => setEditingProduct(null)}
-        />
-      )}
+{showPointsManagement && (
+  <PointsManagementForm onClose={() => setShowPointsManagement(false)} />
+)}
 
-      {showQRCode && (
-        <QRCodeModal onClose={() => setShowQRCode(false)} />
-      )}
 
-      {showStatistics && (
-        <StatisticsModal 
-          type={showStatistics} 
-          onClose={() => setShowStatistics(null)} 
-        />
-      )}
+{showQRCode && (
+  <QRCodeModal
+    onClose={() => setShowQRCode(false)}
+  />
+)}
 
-      {showWebhookConfig && (
-        <WebhookConfigModal onClose={() => setShowWebhookConfig(false)} />
-      )}
+{showStatistics && (
+  <StatisticsModal
+    type={showStatistics}
+    onClose={() => setShowStatistics(null)}
+  />
+)}
+
+{showWebhookConfig && (
+  <WebhookConfigModal
+    onClose={() => setShowWebhookConfig(false)}
+  />
+)}
 
       {/* Reject Modal */}
       {showRejectModal && requestToReject && (

@@ -71,6 +71,7 @@ export interface LoyaltyRequest {
 }
 
 export interface Plan {
+  planId: string;
   id: string;
   name: string;
   maxCustomers: number;
@@ -81,15 +82,17 @@ export interface Plan {
 }
 
 export interface Company {
-  id: string;
-  name: string;
-  slug: string;
-  ownerName: string;
-  ownerEmail: string;
-  password: string;
-  planId: string;
-  isActive: boolean;
-  createdAt: Date;
+  ownerEmail: any;
+  ownerName: any;
+  id:          string;
+  name:        string;
+  slug:        string;
+  owner_name:  string;
+  owner_email: string;
+  password:    string;
+  plan_id:     string;
+  is_active:   boolean;
+  created_at:  string;  // ou Date, dependendo de como você quer receber
 }
 
 export interface WebhookConfig {

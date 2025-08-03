@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Award, Gift, History, Settings, User, Lock, Eye, EyeOff, Package, X } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
-import { formatDate, formatBirthDate, getAge, generateId } from '../../utils/helpers';
+import { formatDate, formatBirthDate, getAge } from '../../utils/helpers';
 import { LoyaltyRequest, PointsTransaction } from '../../types';
+import { supabase } from '../../lib/supabase';
 
 export default function CustomerDashboard() {
   const { state, dispatch } = useApp();
@@ -15,8 +16,179 @@ export default function CustomerDashboard() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [passwordError, setPasswordError] = useState('');
 
-  // Find all customer accounts for this user
   const customerAccounts = state.customers.filter(c => c.email === state.currentUser?.email);
+  const currentCustomer = customerAccounts.find(c => c.companyId === selectedCompanyId);
+  const currentCompany = state.companies.find(c => c.id === selectedCompanyId);
+
+  async function fetchCustomerRequests() {
+  if (!currentCustomer || !selectedCompanyId) return;
+  const { data, error } = await supabase
+    .from('loyalty_requests')
+    .select('*')
+    .eq('company_id', selectedCompanyId)
+    .eq('customer_id', currentCustomer.id)
+    .order('request_date', { ascending: false });
+
+  if (error || !data) {
+    console.error('Erro ao buscar solicitações:', error);
+    return;
+  }
+
+  // mapeia cada linha do banco para o seu tipo LoyaltyRequest
+  const mapped: LoyaltyRequest[] = data.map(r => ({
+    id:                   r.id,
+    customerId:           r.customer_id,
+    customerName:         r.customer_name,
+    productId:            r.product_id,
+    productName:          r.product_name,
+    pointsUsed:           r.points_used,
+    customerPointsBefore: r.customer_points_before,
+    status:               r.status as any,
+    requestDate:          new Date(r.request_date),
+    processedDate:        r.processed_date ? new Date(r.processed_date) : undefined,
+    processedBy:          r.processed_by ?? undefined,
+    expiresAt:            r.expires_at   ? new Date(r.expires_at)   : undefined,
+    companyId:            r.company_id,
+  }));
+
+  // joga tudo no estado de uma vez só
+  dispatch({ type: 'SET_LOYALTY_REQUESTS', payload: mapped });
+}
+
+// 1.2) useEffect para rodar essa busca sempre que mudar de empresa ou cliente
+React.useEffect(() => {
+  fetchCustomerRequests();
+}, [selectedCompanyId, currentCustomer?.id]);
+
+// 2) Assinatura realtime de INSERT e UPDATE
+useEffect(() => {
+  if (!currentCustomer || !selectedCompanyId) return;
+
+  const channel = supabase
+    .channel('customer_loyalty_requests')
+    .on('postgres_changes', {
+      event:  'INSERT',
+      schema: 'public',
+      table:  'loyalty_requests',
+      filter: `company_id=eq.${selectedCompanyId},customer_id=eq.${currentCustomer.id}`,
+    }, ({ new: r }) => {
+      const mapped: LoyaltyRequest = {      // <-- aqui
+        id:                   r.id,
+        customerId:           r.customer_id,
+        customerName:         r.customer_name,
+        productId:            r.product_id,
+        productName:          r.product_name,
+        pointsUsed:           r.points_used,
+        customerPointsBefore: r.customer_points_before,
+        status:               r.status as any,
+        requestDate:          new Date(r.request_date),
+        processedDate:        r.processed_date ? new Date(r.processed_date) : undefined,
+        processedBy:          r.processed_by ?? undefined,
+        expiresAt:            r.expires_at   ? new Date(r.expires_at)   : undefined,
+        companyId:            r.company_id,
+      };
+      dispatch({ type: 'ADD_LOYALTY_REQUEST', payload: mapped });
+    })
+    .on('postgres_changes', {
+      event:  'UPDATE',
+      schema: 'public',
+      table:  'loyalty_requests',
+      filter: `company_id=eq.${selectedCompanyId},customer_id=eq.${currentCustomer.id}`,
+    }, ({ new: r }) => {
+      const mapped: LoyaltyRequest = {      // <-- e aqui também
+        id:                   r.id,
+        customerId:           r.customer_id,
+        customerName:         r.customer_name,
+        productId:            r.product_id,
+        productName:          r.product_name,
+        pointsUsed:           r.points_used,
+        customerPointsBefore: r.customer_points_before,
+        status:               r.status as any,
+        requestDate:          new Date(r.request_date),
+        processedDate:        r.processed_date ? new Date(r.processed_date) : undefined,
+        processedBy:          r.processed_by ?? undefined,
+        expiresAt:            r.expires_at   ? new Date(r.expires_at)   : undefined,
+        companyId:            r.company_id,
+      };
+      dispatch({ type: 'UPDATE_LOYALTY_REQUEST', payload: mapped });
+    })
+    .subscribe();
+
+  return () => supabase.removeChannel(channel);
+}, [selectedCompanyId, currentCustomer?.id, dispatch]);
+  
+
+  const handleRequestProduct = async (product: any) => {
+    // 1) validar pontos
+    if (product.pointsRequired > currentCustomer.points) {
+      alert('Você não possui pontos suficientes para este produto.');
+      return;
+    }
+    if (!window.confirm(`Deseja solicitar ${product.name} por ${product.pointsRequired} pontos?`)) {
+      return;
+    }
+
+    // 2) Inserir a solicitação no banco e já receber o registro completo (com UUID)
+    const { data: newReq, error: reqErr } = await supabase
+      .from<LoyaltyRequest>('loyalty_requests')
+      .insert({
+        customer_id:   currentCustomer.id,
+        customer_name: currentCustomer.name,
+        product_id:    product.id,
+        product_name:  product.name,
+        points_used:   product.pointsRequired,
+        status:        'pending',
+        request_date:  new Date(),
+        company_id:    selectedCompanyId,
+      })
+      .select('*')
+      .single();
+    if (reqErr || !newReq) {
+      console.error('Erro ao criar solicitação:', reqErr);
+      alert('Falha ao enviar solicitação');
+      return;
+    }
+
+    // 3) Atualizar o saldo de pontos do cliente no banco
+    const newPoints = currentCustomer.points - product.pointsRequired;
+    const { data: updCust, error: custErr } = await supabase
+      .from<Customer>('customers')
+      .update({ points: newPoints })
+      .eq('id', currentCustomer.id)
+      .select('*')
+      .single();
+    if (custErr || !updCust) {
+      console.error('Erro ao atualizar pontos do cliente:', custErr);
+      // aqui você poderia até tentar reverter a inserção de newReq, se quiser…
+      return;
+    }
+
+    // 4) Registrar a transação de pontos no banco
+    const { data: newTx, error: txErr } = await supabase
+      .from<PointsTransaction>('points_transactions')
+      .insert({
+        company_id:    selectedCompanyId,
+        customer_id:   currentCustomer.id,
+        customer_name: currentCustomer.name,
+        type:          'spent',
+        points:        product.pointsRequired,
+        description:   `Solicitação: ${product.name}`,
+        date:          new Date(),
+      })
+      .select('*')
+      .single();
+    if (txErr || !newTx) {
+      console.error('Erro ao criar transação:', txErr);
+      // opcional: lidar com rollback
+    }
+
+    // 5) Atualizar o estado local para refletir imediatamente (e/ou rely no realtime)
+    dispatch({ type: 'ADD_LOYALTY_REQUEST',   payload: newReq });
+    dispatch({ type: 'UPDATE_CUSTOMER',        payload: updCust });
+    dispatch({ type: 'ADD_POINTS_TRANSACTION', payload: newTx! });
+
+    alert('✅ Solicitação enviada com sucesso! Aguarde aprovação.');
+  };
   
   // Set initial selected company if not set
   React.useEffect(() => {
@@ -25,8 +197,6 @@ export default function CustomerDashboard() {
     }
   }, [customerAccounts, selectedCompanyId]);
 
-  const currentCustomer = customerAccounts.find(c => c.companyId === selectedCompanyId);
-  const currentCompany = state.companies.find(c => c.id === selectedCompanyId);
   
   if (!currentCustomer || !currentCompany) {
     return (
@@ -46,51 +216,6 @@ export default function CustomerDashboard() {
   // Customer loyalty requests
   const customerLoyaltyRequests = state.loyaltyRequests.filter(r => r.customerId === currentCustomer.id && r.companyId === selectedCompanyId);
 
-  const handleRequestProduct = (product: any) => {
-    if (product.pointsRequired > currentCustomer.points) {
-      alert('Você não possui pontos suficientes para este produto.');
-      return;
-    }
-
-    if (window.confirm(`Deseja solicitar ${product.name} por ${product.pointsRequired} pontos?`)) {
-      // Create loyalty request
-      const loyaltyRequest: LoyaltyRequest = {
-        id: generateId(),
-        customerId: currentCustomer.id,
-        customerName: currentCustomer.name,
-        productId: product.id,
-        productName: product.name,
-        pointsUsed: product.pointsRequired,
-        status: 'pending',
-        requestDate: new Date(),
-        companyId: selectedCompanyId,
-      };
-
-      // Update customer points (deduct)
-      const updatedCustomer = {
-        ...currentCustomer,
-        points: currentCustomer.points - product.pointsRequired,
-      };
-
-      // Create points transaction
-      const transaction: PointsTransaction = {
-        id: generateId(),
-        companyId: selectedCompanyId,
-        customerId: currentCustomer.id,
-        customerName: currentCustomer.name,
-        type: 'spent',
-        points: product.pointsRequired,
-        description: `Solicitação: ${product.name}`,
-        date: new Date(),
-      };
-
-      dispatch({ type: 'ADD_LOYALTY_REQUEST', payload: loyaltyRequest });
-      dispatch({ type: 'UPDATE_CUSTOMER', payload: updatedCustomer });
-      dispatch({ type: 'ADD_POINTS_TRANSACTION', payload: transaction });
-
-      alert('Solicitação enviada com sucesso! Aguarde a aprovação da empresa.');
-    }
-  };
 
   const tabs = [
     { id: 'points', label: 'Meus Pontos', icon: Award },
@@ -306,7 +431,7 @@ export default function CustomerDashboard() {
                   className={`rounded-lg p-4 border-2 ${
                     request.status === 'pending'
                       ? 'bg-yellow-50 border-yellow-200'
-                      : request.status === 'available_for_pickup'
+                      : request.status === 'approved'
                       ? 'bg-blue-50 border-blue-200'
                       : request.status === 'completed'
                       ? 'bg-green-50 border-green-200'
@@ -326,16 +451,20 @@ export default function CustomerDashboard() {
                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                           request.status === 'pending'
                             ? 'bg-yellow-100 text-yellow-800'
-                            : request.status === 'available_for_pickup'
+                            : request.status === 'approved'
                             ? 'bg-blue-100 text-blue-800'
+                            : request.status === 'available_for_pickup'
+                            ? 'bg-cyan-100 text-cyan-800'
                             : request.status === 'completed'
                             ? 'bg-green-100 text-green-800'
                             : 'bg-red-100 text-red-800'
                         }`}>
-                          {request.status === 'pending' 
-                            ? 'Aguardando resposta da loja' 
-                            : request.status === 'available_for_pickup' 
-                            ? 'Disponível para retirada' 
+                          {request.status === 'pending'
+                            ? 'Aguardando resposta da loja'
+                            : request.status === 'approved'
+                            ? 'Aprovado'
+                            : request.status === 'available_for_pickup'
+                            ? 'Disponível para retirada'
                             : request.status === 'completed'
                             ? 'Concluído'
                             : 'Rejeitado'}

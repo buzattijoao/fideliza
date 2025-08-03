@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { X, Settings, DollarSign } from 'lucide-react';
+import { X, DollarSign } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
+import { supabase } from '../../lib/supabase';
 
 interface PointsConfigFormProps {
   onClose: () => void;
@@ -8,21 +9,54 @@ interface PointsConfigFormProps {
 
 export default function PointsConfigForm({ onClose }: PointsConfigFormProps) {
   const { state, dispatch } = useApp();
-  const companyPointsConfig = state.pointsConfigs.find(pc => pc.companyId === state.currentCompany?.id) || { reaisPerPoint: 10, companyId: state.currentCompany?.id || '' };
-  const [reaisPerPoint, setReaisPerPoint] = useState(companyPointsConfig.reaisPerPoint);
-  const [error, setError] = useState('');
+  const currentCompanyId = state.currentCompany?.id;
+  const existingConfig = state.pointsConfigs.find(
+    pc => pc.companyId === currentCompanyId
+  );
+  // Inicializa com valor do state ou default 10
+  const [reaisPerPoint, setReaisPerPoint] = useState(
+    existingConfig?.reaisPerPoint ?? 10
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+    setError(null);
+    if (!currentCompanyId) {
+      setError('Nenhuma empresa selecionada.');
+      return;
+    }
     if (reaisPerPoint <= 0) {
-      setError('O valor deve ser maior que zero');
+      setError('O valor deve ser maior que zero.');
       return;
     }
 
+    setLoading(true);
+    // Persiste no Supabase (upsert)
+    const { data, error: upsertError } = await supabase
+      .from('points_config')
+      .upsert({
+        company_id:      currentCompanyId,
+        reais_per_point: reaisPerPoint,
+      })
+      .select('*')
+      .single();
+
+    setLoading(false);
+    if (upsertError || !data) {
+      console.error('Erro ao salvar configuração:', upsertError);
+      setError('Não foi possível salvar a configuração.');
+      return;
+    }
+
+    // Atualiza o contexto global
     dispatch({
       type: 'UPDATE_POINTS_CONFIG',
-      payload: { reaisPerPoint, companyId: state.currentCompany?.id || '' }
+      payload: {
+        companyId:    data.company_id,
+        reaisPerPoint: data.reais_per_point,
+      },
     });
 
     onClose();
@@ -36,6 +70,7 @@ export default function PointsConfigForm({ onClose }: PointsConfigFormProps) {
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600 transition-colors"
+            disabled={loading}
           >
             <X className="w-6 h-6" />
           </button>
@@ -51,15 +86,16 @@ export default function PointsConfigForm({ onClose }: PointsConfigFormProps) {
               <input
                 type="number"
                 value={reaisPerPoint}
-                onChange={(e) => setReaisPerPoint(Number(e.target.value))}
+                onChange={e => setReaisPerPoint(Number(e.target.value))}
                 min="0.01"
                 step="0.01"
-                className="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 transition-all"
+                disabled={loading}
+                className="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
                 placeholder="0.00"
               />
             </div>
             <p className="mt-2 text-sm text-gray-500">
-              Cada {reaisPerPoint} reais gastos = 1 ponto
+              Cada <strong>R$ {reaisPerPoint.toFixed(2)}</strong> gastos = <strong>1 ponto</strong>
             </p>
           </div>
 
@@ -69,15 +105,15 @@ export default function PointsConfigForm({ onClose }: PointsConfigFormProps) {
             </div>
           )}
 
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <h3 className="font-medium text-blue-800 mb-2">Exemplo</h3>
-            <p className="text-sm text-blue-700">
+          <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
+            <h3 className="font-medium text-indigo-800 mb-2">Exemplo de Pontuação</h3>
+            <p className="text-sm text-indigo-700">
               Com R$ {reaisPerPoint.toFixed(2)} por ponto:
             </p>
-            <ul className="text-sm text-blue-700 mt-2 space-y-1">
-              <li>• Compra de R$ {(reaisPerPoint * 10).toFixed(2)} = 10 pontos</li>
-              <li>• Compra de R$ {(reaisPerPoint * 50).toFixed(2)} = 50 pontos</li>
-              <li>• Compra de R$ {(reaisPerPoint * 100).toFixed(2)} = 100 pontos</li>
+            <ul className="text-sm text-indigo-700 mt-2 space-y-1 list-disc list-inside">
+              <li>Compra de R$ {(reaisPerPoint * 10).toFixed(2)} = 10 pontos</li>
+              <li>Compra de R$ {(reaisPerPoint * 50).toFixed(2)} = 50 pontos</li>
+              <li>Compra de R$ {(reaisPerPoint * 100).toFixed(2)} = 100 pontos</li>
             </ul>
           </div>
 
@@ -85,15 +121,17 @@ export default function PointsConfigForm({ onClose }: PointsConfigFormProps) {
             <button
               type="button"
               onClick={onClose}
+              disabled={loading}
               className="flex-1 px-4 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
             >
               Cancelar
             </button>
             <button
               type="submit"
-              className="flex-1 px-4 py-3 bg-gradient-to-r from-pink-500 to-orange-400 text-white rounded-lg hover:from-pink-600 hover:to-orange-500 transition-all transform hover:scale-105"
+              disabled={loading}
+              className="flex-1 px-4 py-3 bg-gradient-to-r from-indigo-600 to-indigo-500 text-white rounded-lg hover:from-indigo-700 hover:to-indigo-600 transition-all transform hover:scale-105"
             >
-              Salvar
+              {loading ? 'Salvando...' : 'Salvar'}
             </button>
           </div>
         </form>
